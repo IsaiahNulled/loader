@@ -1,15 +1,5 @@
-# Visual Studio
-.vs/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-
-# Build outputs
-*.exe
+# Exclude everything except essential executables
 *.dll
-*.sys
-*.obj
 *.pdb
 *.ilk
 *.map
@@ -19,18 +9,32 @@
 *.tmp
 *.temp
 *.log
+*.obj
+*.o
 
-# User-specific files
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+*.tlog/
+*.recipe/
+*.lastbuildstate/
+*.iobj/
+*.ipdb/
+
+# User-specific files (keep executables, exclude debug files)
 User/bin/
 User/obj/
-User/*.exe
 User/*.dll
 User/*.pdb
 
-# Driver build
+# Driver build (keep .sys, exclude debug files)
 driver/bin/
 driver/obj/
-driver/*.sys
 driver/*.pdb
 
 # Python cache
