@@ -1,0 +1,42 @@
+bool c_widgets::button(std::string name)
+{
+	c_window* window = gui->get_window();
+	if (window->SkipItems)
+		return false;
+
+	c_id id = window->GetID(name.data());
+	// Re-using tab_button_state structure for convenience (alpha, alpha2 used for hover/click anim)
+	tab_button_state* state = gui->anim_container<tab_button_state>(id);
+
+	float width = ImGui::GetContentRegionAvail().x;
+	c_vec2 pos = window->DC.CursorPos;
+	c_vec2 size = c_vec2(width, s_(30)); 
+	c_rect rect = c_rect(pos, pos + size);
+
+	gui->item_size(rect);
+	if (!gui->item_add(rect, id))
+		return false;
+
+	bool pressed = gui->button_behavior(rect, id, nullptr, nullptr);
+	bool hovered = ImGui::IsItemHovered();
+
+	// Animate alpha based on state
+	// alpha: 0.0 (normal) -> 0.2 (hover) -> 0.4 (press)
+	float target = pressed ? 0.4f : (hovered ? 0.2f : 0.0f);
+	gui->easing(state->alpha, target, 10.f, dynamic_easing);
+
+	// Draw Background
+	draw->rect_filled(window->DrawList, rect.Min, rect.Max, draw->get_clr(clr->widget), s_(4.f));
+	
+	// Draw Interaction Overlay (Accent color with alpha)
+	if (state->alpha > 0.01f)
+		draw->rect_filled(window->DrawList, rect.Min, rect.Max, draw->get_clr(clr->accent, state->alpha), s_(4.f));
+
+	draw->rect(window->DrawList, rect.Min, rect.Max, draw->get_clr(clr->border), s_(4.f));
+
+	// Draw Text
+	c_vec2 text_sz = gui->text_size(font->get(inter, 15), name.data(), 0, false, 0);
+	draw->text(window->DrawList, font->get(inter, 15), s_(15.f), rect.GetCenter() - text_sz/2, draw->get_clr(clr->text), name.data());
+
+	return pressed;
+}

@@ -1,0 +1,52 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+*.exe
+*.dll
+*.sys
+*.obj
+*.pdb
+*.ilk
+*.map
+*.exp
+*.lib
+*.pch
+*.tmp
+*.temp
+*.log
+
+# User-specific files
+User/bin/
+User/obj/
+User/*.exe
+User/*.dll
+User/*.pdb
+
+# Driver build
+driver/bin/
+driver/obj/
+driver/*.sys
+driver/*.pdb
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Config files with sensitive data
+discord-bot/keys.json
+discord-bot/config.json
+
+# IDE files
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+.DS_Store
