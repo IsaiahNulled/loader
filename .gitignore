@@ -1,0 +1,46 @@
+# Build artifacts - keep only compiled files
+*.exe
+*.dll
+*.sys
+*.pdb
+*.ilk
+*.map
+*.exp
+*.lib
+*.log
+
+# Source files should not be in build directory
+*.cpp
+*.h
+*.hpp
+*.c
+*.rc
+*.def
+*.sln
+*.vcxproj
+*.vcxproj.filters
+
+# Intermediate files
+*.obj
+*.o
+*.tmp
+*.temp
+*.tlog/
+*.recipe/
+*.lastbuildstate/
+*.iobj/
+*.ipdb/
+
+# Config files
+*.ini
+*.json
+
+# IDE files
+.vs/
+*.user
+*.suo
+*.userosscache
+
+# OS files
+Thumbs.db
+.DS_Store
