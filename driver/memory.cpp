@@ -9,6 +9,25 @@
 #include "definitions.h"
 #include "memory.h"
 
+/* ── Process Liveness Check ──────────────────────────────────────── */
+/*
+ * Returns TRUE if the process is still alive (not terminated).
+ * Uses KeWaitForSingleObject with zero timeout on the process object
+ * (which is a dispatcher object signaled on termination).
+ * Safe at PASSIVE_LEVEL and DISPATCH_LEVEL (zero timeout).
+ *
+ * WHY: Our driver is manually mapped without .pdata, so __try/__except
+ * is non-functional.  If we attach to a dying process and touch freed
+ * pages, the fault is unhandled → BSOD.  This check prevents that.
+ */
+BOOLEAN IsProcessAlive(PEPROCESS process)
+{
+    if (!process) return FALSE;
+    LARGE_INTEGER timeout;
+    timeout.QuadPart = 0;
+    return (KeWaitForSingleObject(process, Executive, KernelMode, FALSE, &timeout) == STATUS_TIMEOUT);
+}
+
 /* ── System Module Helpers ───────────────────────────────────────── */
 
 PVOID GetSystemModuleBase(const char* moduleName)
@@ -98,61 +117,124 @@ BOOL myReadProcessMemory(HANDLE pid, PVOID address, PVOID buffer, DWORD size)
 {
     if (!address || !buffer || !size) return FALSE;
 
+    // Ensure we're at PASSIVE_LEVEL for memory operations
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        DbgPrint("[Memory] IRQL too high for read operation\n");
+        return FALSE;
+    }
+
     PEPROCESS process = NULL;
     NTSTATUS status = PsLookupProcessByProcessId(pid, &process);
     if (!NT_SUCCESS(status)) return FALSE;
 
-    SIZE_T bytes = 0;
-    status = MmCopyVirtualMemory(
-        process, address,
-        PsGetCurrentProcess(), buffer,
-        (SIZE_T)size, KernelMode, &bytes
-    );
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return FALSE;
+    }
 
-    ObfDereferenceObject(process);
-    return NT_SUCCESS(status);
+    __try {
+        // Validate address is within user space
+        if (address > (PVOID)0x7FFFFFFFFFFF) {
+            ObfDereferenceObject(process);
+            return FALSE;
+        }
+
+        SIZE_T bytes = 0;
+        status = MmCopyVirtualMemory(
+            process, address,
+            PsGetCurrentProcess(), buffer,
+            (SIZE_T)size, KernelMode, &bytes
+        );
+
+        ObfDereferenceObject(process);
+        return NT_SUCCESS(status) && bytes == size;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[Memory] Exception during read operation\n");
+        ObfDereferenceObject(process);
+        return FALSE;
+    }
 }
 
 BOOL myWriteProcessMemory(HANDLE pid, PVOID address, PVOID buffer, DWORD size)
 {
     if (!address || !buffer || !size) return FALSE;
 
+    // Ensure we're at PASSIVE_LEVEL for memory operations
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        DbgPrint("[Memory] IRQL too high for write operation\n");
+        return FALSE;
+    }
+
     PEPROCESS process = NULL;
     NTSTATUS status = PsLookupProcessByProcessId(pid, &process);
     if (!NT_SUCCESS(status)) return FALSE;
 
-    SIZE_T bytes = 0;
-    status = MmCopyVirtualMemory(
-        PsGetCurrentProcess(), buffer,
-        process, address,
-        (SIZE_T)size, KernelMode, &bytes
-    );
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return FALSE;
+    }
 
-    ObfDereferenceObject(process);
-    return NT_SUCCESS(status);
+    __try {
+        // Validate address is within user space
+        if (address > (PVOID)0x7FFFFFFFFFFF) {
+            ObfDereferenceObject(process);
+            return FALSE;
+        }
+
+        SIZE_T bytes = 0;
+        status = MmCopyVirtualMemory(
+            PsGetCurrentProcess(), buffer,
+            process, address,
+            (SIZE_T)size, KernelMode, &bytes
+        );
+
+        ObfDereferenceObject(process);
+        return NT_SUCCESS(status) && bytes == size;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[Memory] Exception during write operation\n");
+        ObfDereferenceObject(process);
+        return FALSE;
+    }
 }
 
 /* ── Virtual Memory Management ───────────────────────────────────── */
 
 PVOID AllocateVirtualMemory(HANDLE pid, ULONGLONG size, DWORD protect)
 {
+    // Ensure we're at PASSIVE_LEVEL for virtual memory operations
+    if (KeGetCurrentIrql() > APC_LEVEL) {
+        DbgPrint("[Memory] IRQL too high for virtual memory allocation\n");
+        return NULL;
+    }
+
     PEPROCESS process = NULL;
     if (!NT_SUCCESS(PsLookupProcessByProcessId(pid, &process)))
         return NULL;
 
-    KAPC_STATE apc;
-    KeStackAttachProcess(process, &apc);
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return NULL;
+    }
 
-    PVOID base = NULL;
-    SIZE_T regionSize = (SIZE_T)size;
-    NTSTATUS status = ZwAllocateVirtualMemory(
-        ZwCurrentProcess(), &base, 0, &regionSize,
-        MEM_COMMIT | MEM_RESERVE, protect);
+    __try {
+        KAPC_STATE apc;
+        KeStackAttachProcess(process, &apc);
 
-    KeUnstackDetachProcess(&apc);
-    ObfDereferenceObject(process);
+        PVOID base = NULL;
+        SIZE_T regionSize = (SIZE_T)size;
+        NTSTATUS status = ZwAllocateVirtualMemory(
+            ZwCurrentProcess(), &base, 0, &regionSize,
+            MEM_COMMIT | MEM_RESERVE, protect);
 
-    return NT_SUCCESS(status) ? base : NULL;
+        KeUnstackDetachProcess(&apc);
+        ObfDereferenceObject(process);
+
+        return NT_SUCCESS(status) ? base : NULL;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        DbgPrint("[Memory] Exception during virtual memory allocation\n");
+        ObfDereferenceObject(process);
+        return NULL;
+    }
 }
 
 VOID FreeVirtualMemory(HANDLE pid, PVOID base)
@@ -162,6 +244,11 @@ VOID FreeVirtualMemory(HANDLE pid, PVOID base)
     PEPROCESS process = NULL;
     if (!NT_SUCCESS(PsLookupProcessByProcessId(pid, &process)))
         return;
+
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return;
+    }
 
     KAPC_STATE apc;
     KeStackAttachProcess(process, &apc);
@@ -178,6 +265,11 @@ BOOL ProtectVirtualMemory(HANDLE pid, UINT_PTR base, ULONGLONG size, DWORD prote
     PEPROCESS process = NULL;
     if (!NT_SUCCESS(PsLookupProcessByProcessId(pid, &process)))
         return FALSE;
+
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return FALSE;
+    }
 
     KAPC_STATE apc;
     KeStackAttachProcess(process, &apc);
@@ -221,6 +313,11 @@ PVOID GetProcessModuleBase(HANDLE pid, const wchar_t* moduleName)
     PEPROCESS process = NULL;
     if (!NT_SUCCESS(PsLookupProcessByProcessId(pid, &process)))
         return NULL;
+
+    if (!IsProcessAlive(process)) {
+        ObfDereferenceObject(process);
+        return NULL;
+    }
 
     /*
      * CRITICAL: moduleName points to usermode memory of the CALLING process.

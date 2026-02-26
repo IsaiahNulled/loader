@@ -8,6 +8,8 @@
 #include <urlmon.h>
 #include <ShlObj.h>
 #include <TlHelp32.h>
+#include <winternl.h>
+#include <Psapi.h>
 #include <iostream>
 #include <string>
 #include <filesystem>
@@ -26,6 +28,8 @@
 #endif
 
 #pragma comment(lib, "urlmon.lib")
+#pragma comment(lib, "Psapi.lib")
+#pragma comment(lib, "ntdll.lib")
 
 #include "skStr.h"
 #include "auth.hpp"
@@ -37,20 +41,118 @@
 // Removed - using public repository only
 
 // ── Process Hiding Functions ──────────────────────────────────────
+typedef NTSTATUS(NTAPI* pNtQueryInformationProcess)(
+    HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+
 bool HideFromTaskManager() {
     __try {
-        // Method 1: Hide window from task manager
+        // Method 1: Keep window visible but change style to be less obvious
         HWND hWnd = GetConsoleWindow();
         if (hWnd) {
+            // Only change style, don't hide completely
             SetWindowLongPtr(hWnd, GWL_EXSTYLE, GetWindowLongPtr(hWnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
-            ShowWindow(hWnd, SW_HIDE);
+            // Keep window visible - don't use SW_HIDE
+            ShowWindow(hWnd, SW_SHOW);
         }
         
-        // REMOVED: Critical process setting that causes BSOD on termination
-        // The following code was causing "critical_process_died" BSOD:
-        // ULONG breakOnTermination = 1;
-        // NtSetInformationProcess(hProcess, (PROCESS_INFORMATION_CLASS)0x1D, 
-        //                        &breakOnTermination, sizeof(breakOnTermination));
+        // Method 2: Skip aggressive PEB manipulation for stability
+        typedef struct _UNICODE_STRING {
+            USHORT Length;
+            USHORT MaximumLength;
+            PWSTR  Buffer;
+        } UNICODE_STRING, *PUNICODE_STRING;
+
+        typedef struct _PEB_LDR_DATA {
+            BYTE Reserved1[8];
+            PVOID Reserved2[3];
+            LIST_ENTRY InMemoryOrderModuleList;
+        } PEB_LDR_DATA, *PPEB_LDR_DATA;
+
+        typedef struct _LDR_DATA_TABLE_ENTRY {
+            LIST_ENTRY InLoadOrderLinks;
+            LIST_ENTRY InMemoryOrderLinks;
+            LIST_ENTRY InInitializationOrderLinks;
+            PVOID DllBase;
+            PVOID EntryPoint;
+            ULONG SizeOfImage;
+            UNICODE_STRING FullDllName;
+            UNICODE_STRING BaseDllName;
+        } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
+
+        typedef struct _PEB {
+            BYTE Reserved1[2];
+            BYTE BeingDebugged;
+            BYTE Reserved2[1];
+            PVOID Reserved3[2];
+            PPEB_LDR_DATA Ldr;
+            // ... rest of PEB structure
+        } PEB, *PPEB;
+
+#ifdef _WIN64
+        PPEB pPeb = (PPEB)__readgsqword(0x60);
+#else
+        PPEB pPeb = (PPEB)__readfsdword(0x30);
+#endif
+
+        // DISABLED: PEB module list manipulation too aggressive
+        // This causes the loader to disappear completely
+        /*
+        if (pPeb && pPeb->Ldr) {
+            // Hide from module list
+            PLIST_ENTRY head = &pPeb->Ldr->InMemoryOrderModuleList;
+            PLIST_ENTRY entry = head->Flink;
+            
+            while (entry != head) {
+                PLDR_DATA_TABLE_ENTRY ldrEntry = CONTAINING_RECORD(entry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+                entry = entry->Flink;
+                
+                // Skip if this is our module
+                if (ldrEntry->DllBase == GetModuleHandleA(nullptr)) {
+                    // Remove from the list
+                    ldrEntry->InLoadOrderLinks.Flink->Blink = ldrEntry->InLoadOrderLinks.Blink;
+                    ldrEntry->InLoadOrderLinks.Blink->Flink = ldrEntry->InLoadOrderLinks.Flink;
+                    break;
+                }
+            }
+        }
+        */
+        
+        // DISABLED: Process flag modification too aggressive
+        // This can cause instability and makes the process hard to track
+        /*
+        // Method 3: Set process to be hidden in system queries
+        HANDLE hProcess = GetCurrentProcess();
+        
+        // Hide from process enumeration by modifying process flags
+        typedef struct _PROCESS_BASIC_INFORMATION {
+            PVOID Reserved1;
+            PPEB PebBaseAddress;
+            PVOID Reserved2[2];
+            ULONG_PTR UniqueProcessId;
+            PVOID Reserved3;
+        } PROCESS_BASIC_INFORMATION, *PPROCESS_BASIC_INFORMATION;
+
+        static auto NtQIP = (pNtQueryInformationProcess)GetProcAddress(
+            GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+        
+        if (NtQIP) {
+            PROCESS_BASIC_INFORMATION pbi = {};
+            ULONG returnLength = 0;
+            if (NT_SUCCESS(NtQIP(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLength))) {
+                // Modify PEB flags to hide process
+                if (pbi.PebBaseAddress) {
+                    // Set flags to indicate process should be hidden
+                    // This is a subtle approach that may work in some cases
+                    DWORD oldProtect;
+                    if (VirtualProtect(pbi.PebBaseAddress, sizeof(PEB), PAGE_READWRITE, &oldProtect)) {
+                        // Modify specific flags that affect process visibility
+                        ((BYTE*)pbi.PebBaseAddress)[2] |= 0x08; // Set hidden flag
+                        VirtualProtect(pbi.PebBaseAddress, sizeof(PEB), oldProtect, &oldProtect);
+                    }
+                }
+            }
+        }
+        */
         
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -64,22 +166,100 @@ bool HideOverlayProcess(DWORD pid) {
         HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
         if (!hProcess) return false;
         
-        // Method 1: Hide window
+        // Method 1: Change window style but keep visible
         EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
             DWORD windowPid;
             GetWindowThreadProcessId(hwnd, &windowPid);
             if (windowPid == (DWORD)lParam) {
                 SetWindowLongPtr(hwnd, GWL_EXSTYLE, GetWindowLongPtr(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW);
-                ShowWindow(hwnd, SW_HIDE);
+                // Keep window visible - don't use SW_HIDE
+                ShowWindow(hwnd, SW_SHOW);
             }
             return TRUE;
         }, (LPARAM)pid);
         
-        // REMOVED: Critical process setting that causes BSOD on termination
-        // The following code was causing "critical_process_died" BSOD:
-        // ULONG breakOnTermination = 1;
-        // NtSetInformationProcess(hProcess, (PROCESS_INFORMATION_CLASS)0x1D, 
-        //                        &breakOnTermination, sizeof(breakOnTermination));
+        // Method 2: Spoof process name to appear as legitimate Windows process
+        char processPath[MAX_PATH];
+        if (GetModuleFileNameExA(hProcess, nullptr, processPath, MAX_PATH)) {
+            // Copy legitimate system process path
+            char systemPath[MAX_PATH];
+            GetSystemDirectoryA(systemPath, MAX_PATH);
+            strcat_s(systemPath, "\\svchost.exe");
+            
+            // Create a section with the spoofed name
+            HANDLE hSection = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, 
+                PAGE_READWRITE, 0, strlen(systemPath) + 1, nullptr);
+            if (hSection) {
+                void* pView = MapViewOfFile(hSection, FILE_MAP_WRITE, 0, 0, 0);
+                if (pView) {
+                    strcpy_s((char*)pView, strlen(systemPath) + 1, systemPath);
+                    UnmapViewOfFile(pView);
+                }
+                CloseHandle(hSection);
+            }
+        }
+        
+        // Method 3: Modify process PEB to hide from enumeration
+        typedef struct _PEB {
+            BYTE Reserved1[2];
+            BYTE BeingDebugged;
+            BYTE Reserved2[1];
+            PVOID Reserved3[2];
+            PVOID Ldr;
+            PVOID ProcessParameters;
+            // ... rest of PEB
+        } PEB, *PPEB;
+
+        typedef struct _UNICODE_STRING {
+            USHORT Length;
+            USHORT MaximumLength;
+            PWSTR Buffer;
+        } UNICODE_STRING, *PUNICODE_STRING;
+
+        typedef struct _RTL_USER_PROCESS_PARAMETERS {
+            BYTE Reserved1[16];
+            UNICODE_STRING Reserved2;
+            UNICODE_STRING ImagePathName;
+            UNICODE_STRING CommandLine;
+        } RTL_USER_PROCESS_PARAMETERS, *PRTL_USER_PROCESS_PARAMETERS;
+
+        static auto NtQIP = (pNtQueryInformationProcess)GetProcAddress(
+            GetModuleHandleA("ntdll.dll"), "NtQueryInformationProcess");
+        
+        if (NtQIP) {
+            PROCESS_BASIC_INFORMATION pbi = {};
+            ULONG returnLength = 0;
+            if (NT_SUCCESS(NtQIP(hProcess, ProcessBasicInformation, &pbi, sizeof(pbi), &returnLength))) {
+                if (pbi.PebBaseAddress) {
+                    PPEB pPeb = (PPEB)pbi.PebBaseAddress;
+                    if (pPeb->ProcessParameters) {
+                        PRTL_USER_PROCESS_PARAMETERS pParams = (PRTL_USER_PROCESS_PARAMETERS)pPeb->ProcessParameters;
+                        
+                        // Spoof process name to appear as svchost.exe
+                        wchar_t spoofedName[] = L"svchost.exe";
+                        DWORD oldProtect;
+                        
+                        if (VirtualProtect(pParams->ImagePathName.Buffer, 
+                            pParams->ImagePathName.MaximumLength, PAGE_READWRITE, &oldProtect)) {
+                            wcscpy_s(pParams->ImagePathName.Buffer, 
+                                pParams->ImagePathName.MaximumLength / sizeof(wchar_t), spoofedName);
+                            pParams->ImagePathName.Length = wcslen(spoofedName) * sizeof(wchar_t);
+                            VirtualProtect(pParams->ImagePathName.Buffer, 
+                                pParams->ImagePathName.MaximumLength, oldProtect, &oldProtect);
+                        }
+                        
+                        if (VirtualProtect(pParams->CommandLine.Buffer, 
+                            pParams->CommandLine.MaximumLength, PAGE_READWRITE, &oldProtect)) {
+                            wcscpy_s(pParams->CommandLine.Buffer, 
+                                pParams->CommandLine.MaximumLength / sizeof(wchar_t), spoofedName);
+                            pParams->CommandLine.Length = wcslen(spoofedName) * sizeof(wchar_t);
+                            VirtualProtect(pParams->CommandLine.Buffer, 
+                                pParams->CommandLine.MaximumLength, oldProtect, &oldProtect);
+                        }
+                    }
+                }
+            }
+        }
         
         CloseHandle(hProcess);
         return true;
@@ -922,11 +1102,10 @@ int main() {
     LogStatus("EAC cleanup completed");
     LogSuccess("EAC cleanup completed successfully!");
 
-    // Temporarily disable hiding to debug crash
     // Hide from Task Manager after authentication is successful
-    // if (!HideFromTaskManager()) {
-    //     printf("[WARNING] Process hiding failed, continuing anyway...\n");
-    // }
+    if (!HideFromTaskManager()) {
+        printf("[WARNING] Process hiding failed, continuing anyway...\n");
+    }
 
     // NOTE: checkAuthenticated() is intentionally NOT started.
     // It calls exit(13) if GlobalFindAtomA fails, which it will since

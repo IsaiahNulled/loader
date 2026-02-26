@@ -11,8 +11,8 @@ public:
 
 	struct
 	{
-		float dpi = 2.f;
-		int stored_dpi = 100;
+		float dpi = 0.9f;
+		int stored_dpi = 90;
 		bool dpi_changed = true;
 		float tab_alpha = 1.f;
 		int tab_stored = 0;

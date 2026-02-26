@@ -98,7 +98,7 @@ static void CleanupD3D11();
 // ── Console Colors ─────────────────────────────────────────────
 
 static HANDLE hConsole = nullptr;
-static bool g_ShowDebugOutput = false; // Set to false to hide debugging
+static bool g_ShowDebugOutput = true; // Temporarily enabled for debugging overlay issue
 
 void SetColor(int color) {
     if (hConsole && g_ShowDebugOutput) {
@@ -122,6 +122,7 @@ static HWND FindDiscordOverlay() {
   int screenW = GetSystemMetrics(SM_CXSCREEN);
   int screenH = GetSystemMetrics(SM_CYSCREEN);
 
+  // Try Discord overlay first
   while ((hwnd = FindWindowExA(nullptr, hwnd, "Chrome_WidgetWin_1", nullptr))) {
     if (!IsWindowVisible(hwnd))
       continue;
@@ -141,6 +142,45 @@ static HWND FindDiscordOverlay() {
       return hwnd;
     }
   }
+  
+  // Fallback: Try any Chrome_WidgetWin_1 window (less strict)
+  hwnd = nullptr;
+  while ((hwnd = FindWindowExA(nullptr, hwnd, "Chrome_WidgetWin_1", nullptr))) {
+    if (!IsWindowVisible(hwnd))
+      continue;
+
+    RECT rect;
+    GetWindowRect(hwnd, &rect);
+    int w = rect.right - rect.left;
+    int h = rect.bottom - rect.top;
+
+    // Accept any reasonably sized window
+    if (w >= 800 && h >= 600) {
+      return hwnd;
+    }
+  }
+  
+  // Fallback: Try Rust game window directly
+  HWND rustWindow = FindWindowA("UnityWndClass", "Rust");
+  if (rustWindow && IsWindowVisible(rustWindow)) {
+    return rustWindow;
+  }
+  
+  // Final fallback: Try any Unity window
+  HWND unityWindow = FindWindowA("UnityWndClass", nullptr);
+  if (unityWindow && IsWindowVisible(unityWindow)) {
+    return unityWindow;
+  }
+  
+  // Last resort: Desktop window
+  HWND desktopWindow = GetDesktopWindow();
+  if (desktopWindow) {
+    // Set screen dimensions for desktop
+    g_ScreenW = GetSystemMetrics(SM_CXSCREEN);
+    g_ScreenH = GetSystemMetrics(SM_CYSCREEN);
+    return desktopWindow;
+  }
+  
   return nullptr;
 }
 
@@ -228,7 +268,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
   (void)lpCmdLine;
   (void)nCmdShow;
 
-  // No console - run silently
+  // Console completely disabled for production - no debug window
+  // AllocConsole() removed to prevent any console window from appearing
 
   // Set up signal handlers for safe shutdown
     signal(SIGINT, SignalHandler);   // Ctrl+C
@@ -257,25 +298,21 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     if (test.good()) {
       test.close();
       LoadConfig(g_ConfigPath);
-      printf("[+] Auto-loaded config from %s\n", g_ConfigPath.c_str());
+      // Config auto-load message removed (console disabled)
     }
   }
 
   timeBeginPeriod(1);
 
-  // Initialize console for colors
-  hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-  if (hConsole != INVALID_HANDLE_VALUE) {
-    // Set console to support colors
-    SetConsoleMode(hConsole, ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT);
-  }
+  // Console disabled - no handle initialization needed
+  hConsole = nullptr; // Keep as null since no console exists
 
   LogColored(11, "*", "INSERT = Toggle Menu");  // Cyan
   LogColored(11, "*", "F2     = Toggle Debug Overlay");
   LogColored(11, "*", "F6     = Reconnect Driver");
   LogColored(11, "*", "F7     = Toggle Debug Output");
   LogColored(11, "*", "END    = Exit Safely");
-  printf("\n");
+  // Newline removed (console disabled)
 
   // Driver
   LogColored(11, "*", "Connecting to driver...");
@@ -304,18 +341,45 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       printf("[!] Rust not running. Use menu to attach later.\n");
   }
 
-  // Find Discord overlay window
-  printf("[*] Waiting for Discord overlay (make sure Discord overlay is "
-         "enabled)...\n");
-  while (!g_hWnd) {
+  // Find Discord overlay window with timeout
+  int overlayAttempts = 0;
+  const int maxAttempts = 120; // 60 seconds max
+  
+  // Try immediate detection first
+  g_hWnd = FindDiscordOverlay();
+  if (!g_hWnd) {
+    LogColored(14, "!", "Discord overlay not found immediately, searching...");
+  }
+  
+  while (!g_hWnd && overlayAttempts < maxAttempts) {
     g_hWnd = FindDiscordOverlay();
     if (!g_hWnd) {
       Sleep(500);
+      overlayAttempts++;
+      
+      // Show progress every 10 seconds
+      if (overlayAttempts % 20 == 0) {
+        char progressMsg[128];
+        snprintf(progressMsg, sizeof(progressMsg), "Still searching for Discord overlay... (%d/%d seconds)", 
+                (overlayAttempts * 500) / 1000, 60);
+        LogColored(14, "!", progressMsg);
+      }
+      
       if (GetAsyncKeyState(VK_END) & 1) {
-        printf("[!] Aborted by user\n");
+        LogColored(12, "!", "Aborted by user");
         return 1;
       }
     }
+  }
+  
+  if (!g_hWnd) {
+    LogColored(12, "!", "Failed to find Discord overlay after 60 seconds");
+    LogColored(14, "!", "Troubleshooting:");
+    LogColored(14, "!", "1. Make sure Discord is running");
+    LogColored(14, "!", "2. Enable Discord overlay in Settings > Game Activity");
+    LogColored(14, "!", "3. Join a Discord voice channel");
+    LogColored(14, "!", "4. Run Rust game first, then User.exe");
+    return 1;
   }
   {
     RECT wr;
@@ -473,6 +537,38 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
   // Start hotbar image download (subtle background download)
   g_HotbarDownloader.StartDownload();
+
+  // Hide processes by default from task manager
+  if (g_Driver.IsConnected()) {
+    // Hide current process (user.exe)
+    DWORD userPid = GetCurrentProcessId();
+    if (g_Driver.HideProcess(userPid)) {
+      printf("[+] Hidden user.exe (PID: %d) from task manager\n", userPid);
+    }
+    
+    // Find and hide loader.exe (parent process)
+    DWORD loaderPid = 0;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot != INVALID_HANDLE_VALUE) {
+      PROCESSENTRY32W pe32;
+      pe32.dwSize = sizeof(pe32);
+      if (Process32FirstW(snapshot, &pe32)) {
+        do {
+          if (_wcsicmp(pe32.szExeFile, L"loader.exe") == 0) {
+            loaderPid = pe32.th32ProcessID;
+            break;
+          }
+        } while (Process32NextW(snapshot, &pe32));
+      }
+      CloseHandle(snapshot);
+    }
+    
+    if (loaderPid != 0) {
+      if (g_Driver.HideProcess(loaderPid)) {
+        printf("[+] Hidden loader.exe (PID: %d) from task manager\n", loaderPid);
+      }
+    }
+  }
 
   // Notify Discord bot of injection (configure your server details)
   g_AuthWebhook.Configure("127.0.0.1", 5000, "YOUR_SECRET_KEY_HERE", "YOUR_LICENSE_KEY");
@@ -794,26 +890,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       }
     }
 
-    // Third person: write view offset to PlayerEyes (only when state changes)
-    {
-      static bool wasThirdPerson = false;
-      if (g_thirdPerson != wasThirdPerson && g_SDK && g_SDK->IsAttached()) {
-        uintptr_t local = g_SDK->GetLocalPlayer();
-        if (local) {
-          uintptr_t playerEyes = g_SDK->GetPlayerEyes(local);
-          if (playerEyes && IsValidPtr(playerEyes) && playerEyes >= 0x10000 && playerEyes <= 0x7FFFFFFFFFFF) {
-            Vec3 offset =
-                g_thirdPerson ? Vec3(0.0f, 1.0f, -3.0f) : Vec3(0.0f, 0.0f, 0.0f);
-            g_SDK->WriteVal(playerEyes + offsets::PlayerEyes::view_offset,
-                            offset);
-            wasThirdPerson = g_thirdPerson;
-          }
-        }
-      } else if (g_thirdPerson == wasThirdPerson) {
-        // Already synced, nothing to do
-      }
-    }
-
+    
     // Movement exploits
     if (g_SDK && g_SDK->IsAttached()) {
       uintptr_t local = g_SDK->GetLocalPlayer();
@@ -836,6 +913,29 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
                             0.0f);
             g_SDK->WriteVal(
                 movement + offsets::PlayerWalkMovement::groundAngleNew, 0.0f);
+          }
+
+          // Super Jump: reduce gravity so player jumps higher
+          if (g_superJump) {
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::gravity, -1.5f);
+          }
+
+          // Infinite Jump: zero out jump cooldown so player can jump repeatedly
+          if (g_infiniteJump) {
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::infiniteJump1, 0.0f);
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::infiniteJump2, 9999.0f);
+          }
+
+          // Speed Hack: zero out clothing move speed reduction
+          if (g_speedHack) {
+            g_SDK->WriteVal<float>(local + offsets::BasePlayer::clothingMoveSpeedReduction, 0.0f);
+          }
+
+          // Walk on Water: set ground angle and gravity multiplier to allow walking on water
+          if (g_walkOnWater) {
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::groundAngle, 0.0f);
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::groundAngleNew, 0.0f);
+            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::gravityMultiplier, 0.0f);
           }
         }
 
@@ -909,6 +1009,20 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       if (g_nightSkyColorEnabled && g_SDK && g_SDK->IsAttached()) {
         wasNightSkyColorOn = true;
         g_SDK->SetNightSkyColor(g_nightSkyColorR, g_nightSkyColorG, g_nightSkyColorB);
+      }
+    }
+
+    // FOV changer
+    {
+      static int fovDbg = 0;
+      if (g_fovChangerEnabled && g_SDK && g_SDK->IsAttached()) {
+        // Zoom key hold detection
+        g_isZooming = (GetAsyncKeyState(g_zoomKey) & 0x8000) != 0;
+        float targetFov = g_isZooming ? g_zoomFov : g_gameFov;
+        if (fovDbg++ % 1800 == 0) {
+          printf("[FOV] Applying FOV=%.1f (zoom=%d)\n", targetFov, g_isZooming);
+        }
+        g_SDK->ApplyFOV(targetFov);
       }
     }
 
@@ -1160,50 +1274,19 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
                 float bulletSpeed = g_SDK->GetWeaponBulletSpeed(weapon);
                 float drag = g_SDK->GetWeaponDrag(weapon);
                 float gravity = g_SDK->GetWeaponGravity(weapon) * 9.81f;
-                if (bulletSpeed < 10.0f)
-                  bulletSpeed = 375.0f;
-                if (gravity < 0.01f)
-                  gravity = 9.81f;
-
-                // Simulate projectile trajectory
                 TracerLine t = {};
                 t.projectileAddr = 0;
-                Vec3 vel = {dir.x * bulletSpeed, dir.y * bulletSpeed,
-                            dir.z * bulletSpeed};
-                Vec3 pos = {camPos.x + dir.x * 1.5f, camPos.y + dir.y * 1.5f,
-                            camPos.z + dir.z * 1.5f};
-                t.points[0] = pos;
-
-                float totalTime = 2.0f;
-                int nPts = TracerLine::MAX_PTS;
-                float dt = totalTime / (float)(nPts - 1);
-
-                for (int i = 1; i < nPts; i++) {
-                  // Apply drag
-                  float speed =
-                      sqrtf(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
-                  if (speed > 0.1f) {
-                    float dragForce = drag * speed * dt;
-                    float factor = 1.0f - dragForce / speed;
-                    if (factor < 0.1f)
-                      factor = 0.1f;
-                    vel.x *= factor;
-                    vel.y *= factor;
-                    vel.z *= factor;
-                  }
-                  // Apply gravity
-                  vel.y -= gravity * dt;
-                  // Step position
-                  pos.x += vel.x * dt;
-                  pos.y += vel.y * dt;
-                  pos.z += vel.z * dt;
-                  t.points[i] = pos;
-                }
-                t.numPoints = nPts;
+                t.numPoints = 1;
+                t.points[0] = camPos; // Start at camera position
                 t.spawnTick = now;
 
-                std::lock_guard<std::mutex> lock(g_tracerMutex);
-                g_tracers.push_back(t);
+                // Add to tracer list (will be updated with real projectile positions)
+                {
+                  std::lock_guard<std::mutex> lock(g_tracerMutex);
+                  g_tracers.push_back(t);
+                  if (g_tracers.size() > 20)
+                    g_tracers.erase(g_tracers.begin());
+                }
               }
             }
             lastShotCount = currentShotCount;
@@ -1211,6 +1294,49 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         } else {
           // No weapon equipped, reset shot counter
           lastShotCount = 0;
+        }
+
+        // Update tracer positions from projectile component list
+        {
+          std::lock_guard<std::mutex> lock(g_tracerMutex);
+          uintptr_t projectileList = g_SDK->ReadVal<uintptr_t>(offsets::ListComponent_Projectile_c);
+          if (projectileList && IsValidPtr(projectileList)) {
+            // Read projectile list size and array
+            int projectileCount = g_SDK->ReadVal<int>(projectileList + 0x10);
+            uintptr_t projectileArray = g_SDK->ReadVal<uintptr_t>(projectileList + 0x18);
+            
+            if (projectileArray && IsValidPtr(projectileArray) && projectileCount > 0) {
+              // Update existing tracers with real projectile positions
+              for (auto &t : g_tracers) {
+                if (t.numPoints >= TracerLine::MAX_PTS) continue; // Skip full tracers
+                
+                // Find projectile owned by local player
+                for (int i = 0; i < projectileCount && i < 100; i++) {
+                  uintptr_t projectile = g_SDK->ReadVal<uintptr_t>(projectileArray + i * 0x8);
+                  if (!projectile || !IsValidPtr(projectile)) continue;
+                  
+                  // Check if projectile is owned by local player
+                  uintptr_t owner = g_SDK->ReadVal<uintptr_t>(projectile + offsets::Projectile::owner);
+                  if (owner != local) continue;
+                  
+                  // Read current projectile position
+                  Vec3 currentPos = g_SDK->ReadVal<Vec3>(projectile + offsets::Projectile::currentPosition);
+                  
+                  // Add position to tracer trail
+                  if (t.numPoints == 1 || 
+                      (t.numPoints > 1 && 
+                       (currentPos.x != t.points[t.numPoints - 1].x ||
+                        currentPos.y != t.points[t.numPoints - 1].y ||
+                        currentPos.z != t.points[t.numPoints - 1].z))) {
+                    t.points[t.numPoints] = currentPos;
+                    t.numPoints++;
+                    t.projectileAddr = projectile;
+                    break; // Found our projectile, move to next tracer
+                  }
+                }
+              }
+            }
+          }
         }
 
         // Expire old tracers
