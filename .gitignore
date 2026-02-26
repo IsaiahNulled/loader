@@ -1,7 +1,5 @@
-# Build artifacts - keep only compiled files
-*.exe
+# Exclude everything except essential executables
 *.dll
-*.sys
 *.pdb
 *.ilk
 *.map
@@ -11,6 +9,8 @@
 *.tmp
 *.temp
 *.log
+*.obj
+*.o
 
 # Visual Studio
 .vs/
@@ -18,8 +18,6 @@
 *.suo
 *.userosscache
 *.sln.docstates
-*.obj
-*.o
 
 # Build outputs
 *.tlog/
@@ -28,17 +26,15 @@
 *.iobj/
 *.ipdb/
 
-# User-specific files
+# User-specific files (keep executables, exclude debug files)
 User/bin/
 User/obj/
-User/*.exe
 User/*.dll
 User/*.pdb
 
-# Driver build
+# Driver build (keep .sys, exclude debug files)
 driver/bin/
 driver/obj/
-driver/*.sys
 driver/*.pdb
 
 # Python cache
