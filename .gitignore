@@ -1,0 +1,5 @@
+# Block raw executables — only .enc files should be committed
+*.exe
+*.sys
+*.dll
+!*.enc
