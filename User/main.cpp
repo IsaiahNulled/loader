@@ -3,11 +3,16 @@
  */
 
 #include "globals.h"
+#include "crash_log.h"
 #include "framework/helpers/auth_webhook.h"
 #include <signal.h>
 
 // Global atomic flag for safe shutdown
 std::atomic<bool> g_ShutdownRequested(false);
+
+// Global variables for ReadMemory rate limiting
+int g_readFailCount = 0;
+uintptr_t g_lastFailAddr = 0;
 
 // Signal handler for Ctrl+C, termination, etc.
 void SignalHandler(int signal) {
@@ -85,6 +90,8 @@ void EmergencyCleanup() {
         g_SDK = nullptr;
     }
     
+    CLOG("Emergency cleanup completed");
+    CrashLog::Shutdown();
     printf("[*] Emergency cleanup completed.\n");
 }
 
@@ -98,7 +105,7 @@ static void CleanupD3D11();
 // ── Console Colors ─────────────────────────────────────────────
 
 static HANDLE hConsole = nullptr;
-static bool g_ShowDebugOutput = true; // Temporarily enabled for debugging overlay issue
+static bool g_ShowDebugOutput = true; // Enabled for troubleshooting
 
 void SetColor(int color) {
     if (hConsole && g_ShowDebugOutput) {
@@ -122,7 +129,6 @@ static HWND FindDiscordOverlay() {
   int screenW = GetSystemMetrics(SM_CXSCREEN);
   int screenH = GetSystemMetrics(SM_CYSCREEN);
 
-  // Try Discord overlay first
   while ((hwnd = FindWindowExA(nullptr, hwnd, "Chrome_WidgetWin_1", nullptr))) {
     if (!IsWindowVisible(hwnd))
       continue;
@@ -142,45 +148,6 @@ static HWND FindDiscordOverlay() {
       return hwnd;
     }
   }
-  
-  // Fallback: Try any Chrome_WidgetWin_1 window (less strict)
-  hwnd = nullptr;
-  while ((hwnd = FindWindowExA(nullptr, hwnd, "Chrome_WidgetWin_1", nullptr))) {
-    if (!IsWindowVisible(hwnd))
-      continue;
-
-    RECT rect;
-    GetWindowRect(hwnd, &rect);
-    int w = rect.right - rect.left;
-    int h = rect.bottom - rect.top;
-
-    // Accept any reasonably sized window
-    if (w >= 800 && h >= 600) {
-      return hwnd;
-    }
-  }
-  
-  // Fallback: Try Rust game window directly
-  HWND rustWindow = FindWindowA("UnityWndClass", "Rust");
-  if (rustWindow && IsWindowVisible(rustWindow)) {
-    return rustWindow;
-  }
-  
-  // Final fallback: Try any Unity window
-  HWND unityWindow = FindWindowA("UnityWndClass", nullptr);
-  if (unityWindow && IsWindowVisible(unityWindow)) {
-    return unityWindow;
-  }
-  
-  // Last resort: Desktop window
-  HWND desktopWindow = GetDesktopWindow();
-  if (desktopWindow) {
-    // Set screen dimensions for desktop
-    g_ScreenW = GetSystemMetrics(SM_CXSCREEN);
-    g_ScreenH = GetSystemMetrics(SM_CYSCREEN);
-    return desktopWindow;
-  }
-  
   return nullptr;
 }
 
@@ -265,11 +232,24 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
                    _In_ LPSTR lpCmdLine, _In_ int nCmdShow) {
   (void)hInstance;
   (void)hPrevInstance;
-  (void)lpCmdLine;
   (void)nCmdShow;
 
-  // Console completely disabled for production - no debug window
-  // AllocConsole() removed to prevent any console window from appearing
+  // Initialize crash logging FIRST — before anything that could crash
+  CrashLog::Init();
+  CrashLog::InstallCrashHandler();
+  CLOG("=== User.exe starting ===");
+
+  // Parse command line for --expiry <timestamp>
+  if (lpCmdLine && lpCmdLine[0]) {
+    const char* p = strstr(lpCmdLine, "--expiry");
+    if (p) {
+      p += 8; // skip "--expiry"
+      while (*p == ' ') p++;
+      g_SubExpiry = _atoi64(p);
+    }
+  }
+
+  // Debug console disabled for production
 
   // Set up signal handlers for safe shutdown
     signal(SIGINT, SignalHandler);   // Ctrl+C
@@ -298,25 +278,31 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     if (test.good()) {
       test.close();
       LoadConfig(g_ConfigPath);
-      // Config auto-load message removed (console disabled)
+      printf("[+] Auto-loaded config from %s\n", g_ConfigPath.c_str());
     }
   }
 
   timeBeginPeriod(1);
 
-  // Console disabled - no handle initialization needed
-  hConsole = nullptr; // Keep as null since no console exists
+  // Initialize console for colors
+  hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (hConsole != INVALID_HANDLE_VALUE) {
+    // Set console to support colors
+    SetConsoleMode(hConsole, ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT);
+  }
 
   LogColored(11, "*", "INSERT = Toggle Menu");  // Cyan
   LogColored(11, "*", "F2     = Toggle Debug Overlay");
   LogColored(11, "*", "F6     = Reconnect Driver");
   LogColored(11, "*", "F7     = Toggle Debug Output");
   LogColored(11, "*", "END    = Exit Safely");
-  // Newline removed (console disabled)
+  printf("\n");
 
   // Driver
+  CLOG("Connecting to driver...");
   LogColored(11, "*", "Connecting to driver...");
   if (g_Driver.Init()) {
+    CLOG("Driver connected");
     LogColored(10, "+", "Driver connected!");  // Green
     
     // Verify driver status with additional diagnostics
@@ -326,6 +312,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       LogColored(14, "!", "Driver connection unstable");  // Yellow
     }
   } else {
+    CLOG("Driver NOT connected");
     LogColored(12, "!", "Driver not connected. Load driver first.");  // Red
     LogColored(14, "!", "Continuing anyway (menu will show disconnected state)");
     LogColored(14, "!", "Press F6 to retry driver connection");
@@ -333,53 +320,45 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
   // SDK
   g_SDK = new RustSDK(&g_Driver);
+  CLOG("SDK created, attempting attach...");
   if (g_Driver.IsConnected()) {
     printf("[*] Looking for RustClient.exe...\n");
-    if (g_SDK->Attach())
+    if (g_SDK->Attach()) {
+      CLOG("Attached to Rust (PID=%u)", g_SDK->GetPID());
       printf("[+] Attached to Rust!\n");
-    else
+
+      // Test write capability using player health address (safe: read-only value written back)
+      uintptr_t local = g_SDK->GetLocalPlayer();
+      if (local) {
+        uintptr_t healthAddr = local + offsets::BaseCombatEntity::_health;
+        printf("[*] Testing driver write capability...\n");
+        bool canWrite = g_Driver.TestWriteCapability(g_SDK->GetPID(), healthAddr);
+        if (canWrite) {
+          printf("[+] WRITE BUILD: Driver supports memory writes!\n");
+        } else {
+          printf("[!] SAFE BUILD: Driver does NOT support writes (aimbot/recoil won't work)\n");
+        }
+      } else {
+        printf("[!] No local player yet - write test deferred\n");
+      }
+    } else {
+      CLOG("Rust not running");
       printf("[!] Rust not running. Use menu to attach later.\n");
+    }
   }
 
-  // Find Discord overlay window with timeout
-  int overlayAttempts = 0;
-  const int maxAttempts = 120; // 60 seconds max
-  
-  // Try immediate detection first
-  g_hWnd = FindDiscordOverlay();
-  if (!g_hWnd) {
-    LogColored(14, "!", "Discord overlay not found immediately, searching...");
-  }
-  
-  while (!g_hWnd && overlayAttempts < maxAttempts) {
+  // Find Discord overlay window
+  printf("[*] Waiting for Discord overlay (make sure Discord overlay is "
+         "enabled)...\n");
+  while (!g_hWnd) {
     g_hWnd = FindDiscordOverlay();
     if (!g_hWnd) {
       Sleep(500);
-      overlayAttempts++;
-      
-      // Show progress every 10 seconds
-      if (overlayAttempts % 20 == 0) {
-        char progressMsg[128];
-        snprintf(progressMsg, sizeof(progressMsg), "Still searching for Discord overlay... (%d/%d seconds)", 
-                (overlayAttempts * 500) / 1000, 60);
-        LogColored(14, "!", progressMsg);
-      }
-      
       if (GetAsyncKeyState(VK_END) & 1) {
-        LogColored(12, "!", "Aborted by user");
+        printf("[!] Aborted by user\n");
         return 1;
       }
     }
-  }
-  
-  if (!g_hWnd) {
-    LogColored(12, "!", "Failed to find Discord overlay after 60 seconds");
-    LogColored(14, "!", "Troubleshooting:");
-    LogColored(14, "!", "1. Make sure Discord is running");
-    LogColored(14, "!", "2. Enable Discord overlay in Settings > Game Activity");
-    LogColored(14, "!", "3. Join a Discord voice channel");
-    LogColored(14, "!", "4. Run Rust game first, then User.exe");
-    return 1;
   }
   {
     RECT wr;
@@ -387,6 +366,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     g_ScreenW = wr.right - wr.left;
     g_ScreenH = wr.bottom - wr.top;
   }
+  CLOG("Overlay HWND=0x%p %dx%d", g_hWnd, g_ScreenW, g_ScreenH);
   printf("[+] Hijacked Discord overlay HWND=0x%p (%dx%d)\n", g_hWnd, g_ScreenW,
          g_ScreenH);
 
@@ -579,6 +559,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       printf("[-] Failed to log injection (bot offline or bad key)\n");
   }
 
+  CLOG("Starting worker + chams threads");
   // Background worker thread
   g_WorkerThread = std::thread(WorkerThreadRoutine);
   // Dedicated chams thread (separate from worker to avoid blocking ESP updates)
@@ -745,6 +726,27 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       if (!localPlayerInit) {
         myLocalPlayer = LocalPlayer(g_SDK);
         localPlayerInit = true;
+
+        // One-time write verification: test if driver writes work
+        uintptr_t lp = g_SDK->GetLocalPlayer();
+        DWORD gamePid = g_SDK->GetPID();
+        if (lp && gamePid) {
+          uintptr_t weapon = g_SDK->GetActiveWeaponBaseProjectile(lp);
+          if (weapon) {
+            uintptr_t addr = weapon + offsets::BaseProjectile::aimCone;
+            float orig = g_Driver.Read<float>(gamePid, addr);
+            float testVal = orig + 0.001f;
+            bool writeOk = g_Driver.Write<float>(gamePid, addr, testVal);
+            Sleep(1);
+            float readBack = g_Driver.Read<float>(gamePid, addr);
+            g_Driver.Write<float>(gamePid, addr, orig); // restore
+            bool valueStuck = (fabsf(readBack - testVal) < 0.0001f);
+            printf("[DIAG] Driver write test: write_api=%s value_stuck=%s (orig=%.4f wrote=%.4f read=%.4f)\n",
+                   writeOk ? "OK" : "FAIL", valueStuck ? "YES" : "NO", orig, testVal, readBack);
+          } else {
+            printf("[DIAG] No weapon held — hold a gun to test driver writes\n");
+          }
+        }
       }
       myLocalPlayer.Update();
       Vars::Config::ScreenWidth = g_ScreenW;
@@ -752,24 +754,26 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     }
 
     // No-recoil: scale RecoilProperties values on the active BaseProjectile
+    // Rate-limited to 20Hz — recoil properties don't change between shots
     {
       static bool wasRecoilOn = false;
+      static ULONGLONG lastRecoilWrite = 0;
       g_noRecoilHasLocal = false;
       g_noRecoilHasWeapon = false;
       if (g_noRecoilEnabled && g_SDK && g_SDK->IsAttached()) {
         std::uintptr_t local = g_SDK->GetLocalPlayer();
         if (local) {
           g_noRecoilHasLocal = true;
-          bool applied = g_SDK->ApplyNoRecoil(local);
-          if (applied) {
-            g_noRecoilHasWeapon = true;
-            wasRecoilOn = true;
+          if (now - lastRecoilWrite >= 50) {
+            lastRecoilWrite = now;
+            bool applied = g_SDK->ApplyNoRecoil(local);
+            if (applied) {
+              g_noRecoilHasWeapon = true;
+            }
           } else {
-            // No weapon or no recoil properties (melee/tool) — still mark as active
-            std::uintptr_t weapon = g_SDK->GetActiveWeaponBaseProjectile(local);
-            if (weapon) g_noRecoilHasWeapon = true;
-            wasRecoilOn = true;
+            g_noRecoilHasWeapon = wasRecoilOn; // keep previous state between writes
           }
+          wasRecoilOn = g_noRecoilHasWeapon;
         }
       } else if (wasRecoilOn && g_SDK && g_SDK->IsAttached()) {
         std::uintptr_t local = g_SDK->GetLocalPlayer();
@@ -779,18 +783,20 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       }
     }
 
-    // No Spread: scale aimcone values using slider (0% = no spread, 100% =
-    // original) Restore spread when toggled off
+    // No Spread: scale aimcone values — rate-limited to 20Hz
     {
       static bool wasSpreadOn = false;
+      static ULONGLONG lastSpreadWrite = 0;
       if (g_noSpread && g_SDK && g_SDK->IsAttached()) {
         wasSpreadOn = true;
-        uintptr_t local = g_SDK->GetLocalPlayer();
-        if (local) {
-          g_SDK->ApplyNoSpread(local, g_spreadScale);
+        if (now - lastSpreadWrite >= 50) {
+          lastSpreadWrite = now;
+          uintptr_t local = g_SDK->GetLocalPlayer();
+          if (local) {
+            g_SDK->ApplyNoSpread(local, g_spreadScale);
+          }
         }
       } else if (wasSpreadOn && g_SDK && g_SDK->IsAttached()) {
-        // Just turned off — restore original spread
         uintptr_t local = g_SDK->GetLocalPlayer();
         if (local)
           g_SDK->RestoreSpread(local);
@@ -798,20 +804,26 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       }
     }
 
-    // Insta Eoka: set successFraction to 1.0 so it always fires
-    if (g_instaEoka && g_SDK && g_SDK->IsAttached()) {
-      uintptr_t local = g_SDK->GetLocalPlayer();
-      if (local) {
-        uintptr_t heldEntity = g_SDK->GetActiveWeaponBaseProjectile(local);
-        if (heldEntity && heldEntity >= 0x10000 && heldEntity <= 0x7FFFFFFFFFFF) {
-          g_SDK->WriteVal(
-              heldEntity + offsets::FlintStrikeWeapon::successFraction, 1.0f);
+    // Insta Eoka — rate-limited to 10Hz
+    {
+      static ULONGLONG lastEokaWrite = 0;
+      if (g_instaEoka && g_SDK && g_SDK->IsAttached() && now - lastEokaWrite >= 100) {
+        lastEokaWrite = now;
+        uintptr_t local = g_SDK->GetLocalPlayer();
+        if (local) {
+          uintptr_t heldEntity = g_SDK->GetActiveWeaponBaseProjectile(local);
+          if (heldEntity && heldEntity >= 0x10000 && heldEntity <= 0x7FFFFFFFFFFF) {
+            g_SDK->WriteVal(
+                heldEntity + offsets::FlintStrikeWeapon::successFraction, 1.0f);
+          }
         }
       }
     }
 
-    // Reload bar: track magazine state
-    if (g_reloadBar && g_SDK && g_SDK->IsAttached()) {
+    // Reload bar: track magazine state — rate-limited to 10Hz
+    static ULONGLONG lastReloadRead = 0;
+    if (g_reloadBar && g_SDK && g_SDK->IsAttached() && now - lastReloadRead >= 100) {
+      lastReloadRead = now;
       uintptr_t local = g_SDK->GetLocalPlayer();
       if (local) {
         uintptr_t weapon = g_SDK->GetActiveWeaponBaseProjectile(local);
@@ -891,141 +903,113 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     }
 
     
-    // Movement exploits
+    // Periodic heartbeat log (every 30s) so crash_log shows last alive time
+    {
+      static ULONGLONG lastHeartbeat = 0;
+      if (now - lastHeartbeat >= 30000) {
+        CLOG("heartbeat: fps=%d attached=%d entities=%d",
+             g_FPS, (g_SDK && g_SDK->IsAttached()) ? 1 : 0,
+             (g_SDK ? g_SDK->GetEntityCount() : 0));
+        lastHeartbeat = now;
+      }
+    }
+
+    CLOG_CONTEXT("MovementExploits");
+    // Movement exploits (using encrypted writes for PlayerWalkMovement fields)
+    // Rate limit to prevent excessive writes that could cause crashes
+    static DWORD lastMovementWrite = 0;
+    static DWORD movementStartTick = 0;
+    DWORD currentTime = GetTickCount();
+    if (currentTime - lastMovementWrite < 50) { // Limit to 20 writes per second max
+      goto skip_movement_update;
+    }
+    lastMovementWrite = currentTime;
+
+    // Delay movement writes for 5 seconds after start to let IL2CPP stabilize
+    if (!movementStartTick) movementStartTick = currentTime;
+    if (currentTime - movementStartTick < 5000) goto skip_movement_update;
+    
     if (g_SDK && g_SDK->IsAttached()) {
       uintptr_t local = g_SDK->GetLocalPlayer();
       if (local) {
         uintptr_t movement = g_SDK->ReadVal<uintptr_t>(
             local + offsets::BasePlayer::BaseMovement);
         if (movement && IsValidPtr(movement) && movement >= 0x10000 && movement <= 0x7FFFFFFFFFFF) {
+          // Additional safety: check if player is alive and not in loading state
+          float health = g_SDK->ReadVal<float>(local + offsets::BaseCombatEntity::_health);
+          if (health <= 0.0f) {
+            // Don't write to dead players - skip to end
+          } else {
+          
           // Spiderman: set slope limit to 0 so you can climb anything
           if (g_spiderman) {
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::spiderman,
-                            0.0f);
+            g_SDK->WriteMovementFloat(movement, offsets::PlayerWalkMovement::spiderman, 0.0f);
           }
 
-          // Flyhack: zero gravity so player floats
-          if (g_flyhack) {
-            g_SDK->WriteVal(movement +
-                                offsets::PlayerWalkMovement::gravityMultiplier,
-                            0.0f);
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::groundAngle,
-                            0.0f);
-            g_SDK->WriteVal(
-                movement + offsets::PlayerWalkMovement::groundAngleNew, 0.0f);
-          }
-
-          // Super Jump: reduce gravity so player jumps higher
-          if (g_superJump) {
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::gravity, -1.5f);
-          }
-
-          // Infinite Jump: zero out jump cooldown so player can jump repeatedly
-          if (g_infiniteJump) {
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::infiniteJump1, 0.0f);
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::infiniteJump2, 9999.0f);
-          }
-
-          // Speed Hack: zero out clothing move speed reduction
-          if (g_speedHack) {
-            g_SDK->WriteVal<float>(local + offsets::BasePlayer::clothingMoveSpeedReduction, 0.0f);
-          }
-
-          // Walk on Water: set ground angle and gravity multiplier to allow walking on water
-          if (g_walkOnWater) {
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::groundAngle, 0.0f);
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::groundAngleNew, 0.0f);
-            g_SDK->WriteVal(movement + offsets::PlayerWalkMovement::gravityMultiplier, 0.0f);
+          
+          
           }
         }
 
-        // Omni Sprint: force sprint flag in ModelState so you can sprint in any
-        // direction
-        if (g_omniSprint) {
-          uintptr_t modelState = g_SDK->ReadVal<uintptr_t>(
-              local + offsets::BasePlayer::ModelState);
-          if (modelState && IsValidPtr(modelState) && modelState >= 0x10000 && modelState <= 0x7FFFFFFFFFFF) {
-            int flags =
-                g_SDK->ReadVal<int>(modelState + offsets::ModelState::flags);
-            // Bit 0x20 (32) = sprinting flag — force it on when shift is held
-            if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-              flags |= 0x20; // set sprint flag
-              g_SDK->WriteVal(modelState + offsets::ModelState::flags, flags);
-            }
-          }
-        }
-      }
+              }
     }
+    
+skip_movement_update:
 
-    // Bright night (using new time system)
+    // Bright night — rate-limited to 1Hz (value only changes on slider move)
     {
       static bool wasBrightOn = false;
-      static int bnDbg = 0;
+      static ULONGLONG lastBrightWrite = 0;
       if (g_brightnessEnabled && g_SDK && g_SDK->IsAttached()) {
         wasBrightOn = true;
-        if (bnDbg++ % 1800 == 0) {
-          char buf[128];
-          snprintf(buf, sizeof(buf), "Applying bright night (intensity=%.1f)", g_brightnessIntensity);
-          LogColored(11, "*", buf);
+        if (now - lastBrightWrite >= 1000) {
+          lastBrightWrite = now;
+          g_SDK->SetBrightness(g_brightnessIntensity);
         }
-        g_SDK->SetBrightness(g_brightnessIntensity);
       } else if (wasBrightOn && g_SDK && g_SDK->IsAttached()) {
-        // Restore normal brightness
         g_SDK->SetBrightness(1.0f);
         wasBrightOn = false;
       }
     }
 
-    // Time changer (using new time system)
+    // Time changer — rate-limited to 1Hz
     {
       static bool wasTimeChangerOn = false;
-      static int tcDbg = 0;
+      static ULONGLONG lastTimeWrite = 0;
       if (g_timeChangerEnabled && g_SDK && g_SDK->IsAttached()) {
         wasTimeChangerOn = true;
-        if (tcDbg++ % 1800 == 0) {
-          char buf[128];
-          snprintf(buf, sizeof(buf), "Applying time changer (hour=%.1f)", g_timeHour);
-          LogColored(11, "*", buf);
+        if (now - lastTimeWrite >= 1000) {
+          lastTimeWrite = now;
+          g_SDK->SetTimeOfDay(g_timeHour);
         }
-        g_SDK->SetTimeOfDay(g_timeHour);
       } else if (wasTimeChangerOn && g_SDK && g_SDK->IsAttached()) {
-        // Restore normal time progression (set to current time)
         wasTimeChangerOn = false;
       }
     }
 
-    // Sky color changer
+    // Sky color changer — rate-limited to 1Hz
     {
-      static bool wasSkyColorOn = false;
+      static ULONGLONG lastSkyWrite = 0;
       if (g_skyColorEnabled && g_SDK && g_SDK->IsAttached()) {
-        wasSkyColorOn = true;
-        g_SDK->SetSkyColor(g_skyColorR, g_skyColorG, g_skyColorB);
-      }
-    }
-
-    // Night sky color changer
-    {
-      static bool wasNightSkyColorOn = false;
-      if (g_nightSkyColorEnabled && g_SDK && g_SDK->IsAttached()) {
-        wasNightSkyColorOn = true;
-        g_SDK->SetNightSkyColor(g_nightSkyColorR, g_nightSkyColorG, g_nightSkyColorB);
-      }
-    }
-
-    // FOV changer
-    {
-      static int fovDbg = 0;
-      if (g_fovChangerEnabled && g_SDK && g_SDK->IsAttached()) {
-        // Zoom key hold detection
-        g_isZooming = (GetAsyncKeyState(g_zoomKey) & 0x8000) != 0;
-        float targetFov = g_isZooming ? g_zoomFov : g_gameFov;
-        if (fovDbg++ % 1800 == 0) {
-          printf("[FOV] Applying FOV=%.1f (zoom=%d)\n", targetFov, g_isZooming);
+        if (now - lastSkyWrite >= 1000) {
+          lastSkyWrite = now;
+          g_SDK->SetSkyColor(g_skyColorR, g_skyColorG, g_skyColorB);
         }
-        g_SDK->ApplyFOV(targetFov);
       }
     }
 
+    // Night sky color changer — rate-limited to 1Hz
+    {
+      static ULONGLONG lastNightSkyWrite = 0;
+      if (g_nightSkyColorEnabled && g_SDK && g_SDK->IsAttached()) {
+        if (now - lastNightSkyWrite >= 1000) {
+          lastNightSkyWrite = now;
+          g_SDK->SetNightSkyColor(g_nightSkyColorR, g_nightSkyColorG, g_nightSkyColorB);
+        }
+      }
+    }
+
+    
     // Remove Layers (trees, clutter, debris, construction)
     if (g_SDK && g_SDK->IsAttached()) {
       static bool wasLayersRemoved = false;
@@ -1386,27 +1370,47 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     RenderDebugOverlay();
     RenderESP();
 
-    // End frame
     ImGui::Render();
+
     float clearColor[4] = {0, 0, 0, 0};
     g_pd3dContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
     g_pd3dContext->ClearRenderTargetView(g_pRenderTargetView, clearColor);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    g_pSwapChain->Present(0, 0);
-
-    // Frame limiter
+    // Vsync ON — prevents tearing/ghosting on transparent overlay (the "two menus" flicker)
+    // Overlay can't display faster than the monitor anyway; FPS cap still works below refresh rate
+    HRESULT presentResult = g_pSwapChain->Present(1, 0);
+    
+    // If vsync fails (monitor refresh rate issues), fall back to frame limiting
+    if (presentResult == DXGI_ERROR_DEVICE_RESET || presentResult == DXGI_ERROR_DEVICE_REMOVED) {
+        g_Running = false;
+        return 0;
+    }
+    
+    // Optional frame limiter for users who want specific FPS below refresh rate
     if (g_fpsCap > 0 && g_fpsCap < 300) {
-      float targetMs = 1000.0f / (float)g_fpsCap;
+      static LARGE_INTEGER lastFrame = {};
       LARGE_INTEGER now, freq;
       QueryPerformanceCounter(&now);
       QueryPerformanceFrequency(&freq);
-      double elapsed = (double)(now.QuadPart - g_LastFrameTime.QuadPart) *
-                       1000.0 / (double)freq.QuadPart;
-      int sleepMs = (int)(targetMs - elapsed);
-      if (sleepMs > 0)
-        Sleep(sleepMs);
+      
+      if (lastFrame.QuadPart > 0) {
+          double elapsedMs = (double)(now.QuadPart - lastFrame.QuadPart) * 1000.0 / (double)freq.QuadPart;
+          double targetMs = 1000.0 / (double)g_fpsCap;
+          
+          if (elapsedMs < targetMs) {
+              int sleepMs = (int)(targetMs - elapsedMs);
+              if (sleepMs > 0 && sleepMs < 100) { // Sanity check
+                  Sleep(sleepMs);
+              }
+          }
+      }
+      lastFrame = now;
     }
-    QueryPerformanceCounter(&g_LastFrameTime);
+    
+    // Small sleep when menu is hidden to reduce CPU usage
+    if (!g_ShowMenu) {
+      Sleep(1); // 1ms sleep when menu is hidden
+    }
   }
 
   // ── Cleanup ────────────────────────────────────────────────────
