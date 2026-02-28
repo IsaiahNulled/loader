@@ -511,8 +511,8 @@ bool DownloadDriverToMemory(std::vector<uint8_t>& outBuffer) {
     }
 
     // Fallback: stream from GitHub directly to memory (zero disk)
-    std::string primaryUrl = enc::BuildUrl({E("https://"), E("github"), E(".com/"), E("IsaiahNulled"), E("/Needed/"), E("raw/refs/heads/main/"), E("driver/driver"), E(".sys")});
-    std::string fallbackUrl = enc::BuildUrl({E("https://"), E("raw.githubusercontent"), E(".com/"), E("IsaiahNulled"), E("/Needed/"), E("main/"), E("driver/driver"), E(".sys")});
+    std::string primaryUrl = enc::BuildUrl({E("https://"), E("github"), E(".com/"), E("IsaiahNulled"), E("/loader/"), E("raw/refs/heads/main/"), E("driver/driver"), E(".sys")});
+    std::string fallbackUrl = enc::BuildUrl({E("https://"), E("raw.githubusercontent"), E(".com/"), E("IsaiahNulled"), E("/loader/"), E("main/"), E("driver/driver"), E(".sys")});
 
     if (MemPayload::DownloadToMemoryWithFallback(primaryUrl, fallbackUrl, outBuffer)) {
         // If your hosted files are XOR-encrypted, uncomment:
@@ -598,8 +598,8 @@ bool DownloadOverlayToMemory(std::vector<uint8_t>& outBuffer) {
     else
         overlayPath = E("safe/User/x64/Release/User.exe");
 
-    std::string primaryUrl = enc::BuildUrl({E("https://"), E("github"), E(".com/"), E("IsaiahNulled"), E("/Needed/"), E("raw/refs/heads/main/")}) + overlayPath;
-    std::string fallbackUrl = enc::BuildUrl({E("https://"), E("raw.githubusercontent"), E(".com/"), E("IsaiahNulled"), E("/Needed/"), E("main/")}) + overlayPath;
+    std::string primaryUrl = enc::BuildUrl({E("https://"), E("github"), E(".com/"), E("IsaiahNulled"), E("/loader/"), E("raw/refs/heads/main/")}) + overlayPath;
+    std::string fallbackUrl = enc::BuildUrl({E("https://"), E("raw.githubusercontent"), E(".com/"), E("IsaiahNulled"), E("/loader/"), E("main/")}) + overlayPath;
 
     if (MemPayload::DownloadToMemoryWithFallback(primaryUrl, fallbackUrl, outBuffer)) {
         if (IsValidPE(outBuffer)) {
