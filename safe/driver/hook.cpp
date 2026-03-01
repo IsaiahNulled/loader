@@ -4,7 +4,6 @@
 #include "physical_memory.h"
 #include "process_hider.h"
 
-
 BOOL Hook::Install(void* handlerAddr)
 {
     if (!handlerAddr)
@@ -216,7 +215,7 @@ NTSTATUS Hook::Handler(PVOID callParam)
         break;
 
     case CMD_BSOD:
-        KeBugCheckEx(0xDEADDEAD, 0, 0, 0, 0);
+        KeBugCheckEx(MANUALLY_INITIATED_CRASH, 0, 0, 0, 0);
         break;
 
     default:

