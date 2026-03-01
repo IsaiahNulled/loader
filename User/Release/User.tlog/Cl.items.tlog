@@ -11,8 +11,3 @@ C:\Users\Isaiah\Desktop\external\User\imgui\backends\imgui_impl_win32.cpp;C:\Use
 C:\Users\Isaiah\Desktop\external\User\imgui\backends\imgui_impl_dx11.cpp;C:\Users\Isaiah\Desktop\external\User\Release\imgui_impl_dx11.obj
 C:\Users\Isaiah\Desktop\external\User\radar.cpp;C:\Users\Isaiah\Desktop\external\User\Release\radar.obj
 C:\Users\Isaiah\Desktop\external\User\stb_image_impl.cpp;C:\Users\Isaiah\Desktop\external\User\Release\stb_image_impl.obj
-C:\Users\Isaiah\Desktop\external\mapper\intel_driver.cpp;C:\Users\Isaiah\Desktop\external\User\Release\intel_driver.obj
-C:\Users\Isaiah\Desktop\external\mapper\mapper.cpp;C:\Users\Isaiah\Desktop\external\User\Release\mapper.obj
-C:\Users\Isaiah\Desktop\external\mapper\service.cpp;C:\Users\Isaiah\Desktop\external\User\Release\service.obj
-C:\Users\Isaiah\Desktop\external\mapper\utils.cpp;C:\Users\Isaiah\Desktop\external\User\Release\utils.obj
-C:\Users\Isaiah\Desktop\external\mapper\portable_executable.cpp;C:\Users\Isaiah\Desktop\external\User\Release\portable_executable.obj

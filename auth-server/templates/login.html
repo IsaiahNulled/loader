@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jew Ware - Admin Panel</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0a0f;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ── Rain Canvas ────────────────────────────── */
+        #rain-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* ── Lightning Flash ────────────────────────── */
+        .lightning-flash {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 1;
+            pointer-events: none;
+            background: white;
+            opacity: 0;
+        }
+        .lightning-flash.strike {
+            animation: lightningStrike 0.3s ease-out;
+        }
+        @keyframes lightningStrike {
+            0%   { opacity: 0; }
+            5%   { opacity: 0.8; }
+            10%  { opacity: 0.1; }
+            15%  { opacity: 0.6; }
+            20%  { opacity: 0; }
+            25%  { opacity: 0.4; }
+            30%  { opacity: 0; }
+            100% { opacity: 0; }
+        }
+
+        /* ── Lightning Bolt SVG ─────────────────────── */
+        .lightning-bolt {
+            position: fixed;
+            top: 0;
+            z-index: 1;
+            pointer-events: none;
+            opacity: 0;
+        }
+        .lightning-bolt.visible {
+            animation: boltFlash 0.25s ease-out;
+        }
+        @keyframes boltFlash {
+            0%   { opacity: 0; }
+            8%   { opacity: 1; }
+            15%  { opacity: 0.2; }
+            22%  { opacity: 0.9; }
+            35%  { opacity: 0; }
+            100% { opacity: 0; }
+        }
+
+        /* ── Ambient Glow ───────────────────────────── */
+        .ambient-glow {
+            position: fixed;
+            width: 600px; height: 600px;
+            border-radius: 50%;
+            filter: blur(120px);
+            z-index: 0;
+            pointer-events: none;
+        }
+        .glow-1 {
+            top: -200px; left: -100px;
+            background: rgba(139, 92, 246, 0.08);
+            animation: glowPulse1 8s ease-in-out infinite;
+        }
+        .glow-2 {
+            bottom: -200px; right: -100px;
+            background: rgba(59, 130, 246, 0.06);
+            animation: glowPulse2 10s ease-in-out infinite;
+        }
+        @keyframes glowPulse1 {
+            0%, 100% { opacity: 0.4; transform: scale(1); }
+            50%      { opacity: 0.7; transform: scale(1.1); }
+        }
+        @keyframes glowPulse2 {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50%      { opacity: 0.6; transform: scale(1.15); }
+        }
+
+        /* ── Login Card ─────────────────────────────── */
+        .login-container {
+            position: relative;
+            z-index: 10;
+            width: 380px;
+            animation: cardSlideIn 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes cardSlideIn {
+            0%   { opacity: 0; transform: translateY(30px) scale(0.96); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .login-card {
+            background: rgba(15, 15, 25, 0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            padding: 40px 36px;
+            box-shadow:
+                0 0 0 1px rgba(139, 92, 246, 0.05),
+                0 20px 60px rgba(0, 0, 0, 0.5),
+                0 0 80px rgba(139, 92, 246, 0.03);
+        }
+
+        /* ── Logo / Branding ────────────────────────── */
+        .brand {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .brand-icon {
+            width: 48px; height: 48px;
+            margin: 0 auto 16px;
+            background: linear-gradient(135deg, #8b5cf6, #6366f1);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 24px rgba(139, 92, 246, 0.3);
+            animation: iconPulse 3s ease-in-out infinite;
+        }
+        @keyframes iconPulse {
+            0%, 100% { box-shadow: 0 8px 24px rgba(139, 92, 246, 0.3); }
+            50%      { box-shadow: 0 8px 32px rgba(139, 92, 246, 0.5); }
+        }
+        .brand-icon svg {
+            width: 24px; height: 24px;
+            fill: white;
+        }
+        .brand h1 {
+            font-size: 22px;
+            font-weight: 600;
+            color: #fff;
+            letter-spacing: -0.02em;
+        }
+        .brand h1 span {
+            color: #c084fc;
+        }
+        .brand p {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.35);
+            margin-top: 6px;
+        }
+
+        /* ── Form ───────────────────────────────────── */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .input-wrapper {
+            position: relative;
+        }
+        .input-wrapper input {
+            width: 100%;
+            padding: 12px 16px;
+            padding-right: 44px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            color: #fff;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            outline: none;
+            transition: all 0.25s ease;
+        }
+        .input-wrapper input::placeholder {
+            color: rgba(255, 255, 255, 0.2);
+        }
+        .input-wrapper input:focus {
+            border-color: rgba(139, 92, 246, 0.5);
+            background: rgba(139, 92, 246, 0.04);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+        }
+        .input-icon {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px; height: 18px;
+            opacity: 0.3;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .input-icon:hover { opacity: 0.6; }
+
+        /* ── Submit Button ──────────────────────────── */
+        .submit-btn {
+            width: 100%;
+            padding: 13px;
+            background: linear-gradient(135deg, #8b5cf6, #6366f1);
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .submit-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4);
+        }
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+        .submit-btn::after {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+            transition: left 0.5s;
+        }
+        .submit-btn:hover::after {
+            left: 100%;
+        }
+
+        /* ── Error Message ──────────────────────────── */
+        .error-msg {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #fca5a5;
+            text-align: center;
+            animation: errorShake 0.4s ease;
+        }
+        @keyframes errorShake {
+            0%, 100% { transform: translateX(0); }
+            20%      { transform: translateX(-6px); }
+            40%      { transform: translateX(6px); }
+            60%      { transform: translateX(-4px); }
+            80%      { transform: translateX(4px); }
+        }
+
+        /* ── Footer ─────────────────────────────────── */
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Ambient glow orbs -->
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+
+    <!-- Rain canvas -->
+    <canvas id="rain-canvas"></canvas>
+
+    <!-- Lightning flash overlay -->
+    <div class="lightning-flash" id="lightning-flash"></div>
+
+    <!-- Login card -->
+    <div class="login-container">
+        <div class="login-card">
+            <div class="brand">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.83-3.4 9.37-7 10.5-3.6-1.13-7-5.67-7-10.5V6.3l7-3.12z"/></svg>
+                </div>
+                <h1>Jew <span>Ware</span></h1>
+                <p>Admin Panel</p>
+                <p style="font-size: 11px; opacity: 0.6; margin-top: 4px;">JewWareAdminPortal.com</p>
+            </div>
+
+            {% if error %}
+            <div class="error-msg">{{ error }}</div>
+            {% endif %}
+
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label>Password</label>
+                    <div class="input-wrapper">
+                        <input type="password" name="password" id="password" placeholder="Enter admin password" autofocus autocomplete="off">
+                        <svg class="input-icon" id="toggle-pw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: rgba(255,255,255,0.3)">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    </div>
+                </div>
+
+                <button type="submit" class="submit-btn">Sign In</button>
+            </form>
+
+            <div class="footer">Secured Connection</div>
+        </div>
+    </div>
+
+    <script>
+    // ── Rain Effect ──────────────────────────────────
+    const canvas = document.getElementById('rain-canvas');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+
+    function resize() {
+        W = canvas.width = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    class Drop {
+        constructor() { this.reset(true); }
+        reset(init) {
+            this.x = Math.random() * W;
+            this.y = init ? Math.random() * -H : -10;
+            this.len = 12 + Math.random() * 20;
+            this.speed = 8 + Math.random() * 12;
+            this.opacity = 0.05 + Math.random() * 0.15;
+            this.width = 0.5 + Math.random() * 0.8;
+        }
+        update() {
+            this.y += this.speed;
+            if (this.y > H + this.len) this.reset(false);
+        }
+        draw() {
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(this.x + 0.5, this.y - this.len);
+            ctx.strokeStyle = `rgba(174, 194, 224, ${this.opacity})`;
+            ctx.lineWidth = this.width;
+            ctx.stroke();
+        }
+    }
+
+    const drops = [];
+    for (let i = 0; i < 300; i++) drops.push(new Drop());
+
+    // ── Splash particles ──
+    class Splash {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.vx = (Math.random() - 0.5) * 2;
+            this.vy = -Math.random() * 2 - 0.5;
+            this.life = 1;
+            this.decay = 0.03 + Math.random() * 0.04;
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.08;
+            this.life -= this.decay;
+        }
+        draw() {
+            if (this.life <= 0) return;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 0.8, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(174, 194, 224, ${this.life * 0.3})`;
+            ctx.fill();
+        }
+    }
+
+    let splashes = [];
+
+    function animate() {
+        ctx.clearRect(0, 0, W, H);
+
+        // Update and draw rain
+        for (const d of drops) {
+            const wasAbove = d.y < H;
+            d.update();
+            d.draw();
+            // Spawn splash when drop hits bottom
+            if (wasAbove && d.y >= H && Math.random() < 0.3) {
+                for (let s = 0; s < 3; s++) splashes.push(new Splash(d.x, H));
+            }
+        }
+
+        // Update and draw splashes
+        splashes = splashes.filter(s => s.life > 0);
+        for (const s of splashes) { s.update(); s.draw(); }
+
+        requestAnimationFrame(animate);
+    }
+    animate();
+
+    // ── Lightning Effect ─────────────────────────────
+    const flashEl = document.getElementById('lightning-flash');
+
+    function generateBoltPath(startX, startY, endY) {
+        let points = [{x: startX, y: startY}];
+        let x = startX, y = startY;
+        const segments = 12 + Math.floor(Math.random() * 8);
+        const stepY = (endY - startY) / segments;
+
+        for (let i = 0; i < segments; i++) {
+            x += (Math.random() - 0.5) * 80;
+            y += stepY + (Math.random() - 0.5) * 10;
+            points.push({x, y});
+
+            // Branch
+            if (Math.random() < 0.3) {
+                let bx = x, by = y;
+                const branchLen = 2 + Math.floor(Math.random() * 3);
+                const branchPts = [{x: bx, y: by}];
+                for (let j = 0; j < branchLen; j++) {
+                    bx += (Math.random() - 0.5) * 60;
+                    by += stepY * 0.6;
+                    branchPts.push({x: bx, y: by});
+                }
+                points.push({branch: branchPts});
+            }
+        }
+        return points;
+    }
+
+    function drawBolt(points, alpha) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        function drawSegments(pts, width, color) {
+            ctx.beginPath();
+            ctx.moveTo(pts[0].x, pts[0].y);
+            for (let i = 1; i < pts.length; i++) {
+                if (pts[i].branch) continue;
+                ctx.lineTo(pts[i].x, pts[i].y);
+            }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.shadowColor = 'rgba(180, 200, 255, 0.8)';
+            ctx.shadowBlur = width * 8;
+            ctx.stroke();
+        }
+
+        // Glow layers
+        drawSegments(points, 6, `rgba(100, 150, 255, ${alpha * 0.15})`);
+        drawSegments(points, 3, `rgba(180, 200, 255, ${alpha * 0.4})`);
+        drawSegments(points, 1.2, `rgba(255, 255, 255, ${alpha * 0.9})`);
+
+        // Draw branches
+        for (const p of points) {
+            if (p.branch) {
+                ctx.beginPath();
+                ctx.moveTo(p.branch[0].x, p.branch[0].y);
+                for (let j = 1; j < p.branch.length; j++) {
+                    ctx.lineTo(p.branch[j].x, p.branch[j].y);
+                }
+                ctx.strokeStyle = `rgba(180, 200, 255, ${alpha * 0.3})`;
+                ctx.lineWidth = 0.8;
+                ctx.shadowBlur = 6;
+                ctx.stroke();
+            }
+        }
+
+        ctx.restore();
+    }
+
+    let activeBolt = null;
+    let boltAlpha = 0;
+
+    function triggerLightning() {
+        const startX = W * 0.2 + Math.random() * W * 0.6;
+        activeBolt = generateBoltPath(startX, -20, H * (0.4 + Math.random() * 0.3));
+        boltAlpha = 1;
+
+        // Screen flash
+        flashEl.classList.remove('strike');
+        void flashEl.offsetWidth;
+        flashEl.classList.add('strike');
+
+        // Fade out bolt
+        const fade = setInterval(() => {
+            boltAlpha -= 0.06;
+            if (boltAlpha <= 0) {
+                boltAlpha = 0;
+                activeBolt = null;
+                clearInterval(fade);
+            }
+        }, 16);
+
+        // Sometimes do a double-strike
+        if (Math.random() < 0.4) {
+            setTimeout(() => {
+                activeBolt = generateBoltPath(startX + (Math.random()-0.5)*40, -20, H * (0.3 + Math.random() * 0.4));
+                boltAlpha = 0.8;
+                flashEl.classList.remove('strike');
+                void flashEl.offsetWidth;
+                flashEl.classList.add('strike');
+            }, 120 + Math.random() * 80);
+        }
+    }
+
+    // Draw bolt in the rain animation loop
+    const origAnimate = animate;
+    function animateWithBolt() {
+        ctx.clearRect(0, 0, W, H);
+        for (const d of drops) {
+            const wasAbove = d.y < H;
+            d.update(); d.draw();
+            if (wasAbove && d.y >= H && Math.random() < 0.3) {
+                for (let s = 0; s < 3; s++) splashes.push(new Splash(d.x, H));
+            }
+        }
+        splashes = splashes.filter(s => s.life > 0);
+        for (const s of splashes) { s.update(); s.draw(); }
+
+        if (activeBolt && boltAlpha > 0) drawBolt(activeBolt, boltAlpha);
+
+        requestAnimationFrame(animateWithBolt);
+    }
+    // Replace animation loop
+    cancelAnimationFrame(animate);
+    animateWithBolt();
+
+    // Random lightning strikes every 4-12 seconds
+    function scheduleLightning() {
+        const delay = 4000 + Math.random() * 8000;
+        setTimeout(() => {
+            triggerLightning();
+            scheduleLightning();
+        }, delay);
+    }
+    // First strike after 2-5 seconds
+    setTimeout(() => { triggerLightning(); scheduleLightning(); }, 2000 + Math.random() * 3000);
+
+    // ── Toggle password visibility ───────────────────
+    document.getElementById('toggle-pw').addEventListener('click', function() {
+        const pw = document.getElementById('password');
+        pw.type = pw.type === 'password' ? 'text' : 'password';
+    });
+
+    // ── Enter key submit ─────────────────────────────
+    document.getElementById('password').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') this.closest('form').submit();
+    });
+    </script>
+</body>
+</html>

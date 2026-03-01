@@ -1,8 +1,8 @@
 #include "../headers/includes.h"
 
 struct slider_ex_state {
-	float pos;
-	c_vec4 text;
+	float pos = 0.f;
+	c_vec4 text = {0.78f, 0.76f, 0.82f, 1.0f}; // init to visible (matches clr->text)
 };
 
 bool slider_ex(std::string name, float* callback, float vmin, float vmax, std::string format, bool custom_slider = false, c_rect* out_button = 0, c_rect* out_grab = 0)
@@ -33,7 +33,13 @@ bool slider_ex(std::string name, float* callback, float vmin, float vmax, std::s
 		*callback = vmin + (vmax - vmin) * normalized;
 	}
 
-	gui->easing(state->text, held ? clr->white.Value : clr->text.Value, 24.f, dynamic_easing);
+	{
+		c_vec4 target_text = held ? clr->white.Value : clr->text.Value;
+		if (state->text.x == 0.f && state->text.y == 0.f && state->text.z == 0.f && state->text.w == 0.f)
+			state->text = target_text;
+		else
+			gui->easing(state->text, target_text, 24.f, dynamic_easing);
+	}
 	gui->easing(state->pos, ImSaturate((*callback - vmin) / (vmax - vmin)), 24.f, dynamic_easing);
 
 	draw->rect_filled(window->DrawList, rect.Min, rect.Max, draw->get_clr(clr->widget), s_(elements->child.rounding));
@@ -48,8 +54,9 @@ bool slider_ex(std::string name, float* callback, float vmin, float vmax, std::s
 		draw->rect_filled(window->DrawList, button.Min, button.Max, draw->get_clr(clr->deter), s_(elements->slider.button_rounding));
 		draw->rect(window->DrawList, button.Min, button.Max, draw->get_clr(clr->border), s_(elements->slider.button_rounding));
 	
-		if (state->pos > 0.01f)
-			draw->rect_filled(window->DrawList, button.Min, button.Min + c_vec2(button.GetWidth() * state->pos, button.GetHeight()), draw->get_clr(clr->accent), s_(elements->slider.button_rounding));
+		float fill_w = button.GetWidth() * state->pos;
+		if (fill_w < s_(3.0f)) fill_w = s_(3.0f);
+		draw->rect_filled(window->DrawList, button.Min, button.Min + c_vec2(fill_w, button.GetHeight()), draw->get_clr(clr->accent), s_(elements->slider.button_rounding));
 	}
 
 	float grab_x = button.Min.x + button.GetWidth() * state->pos;

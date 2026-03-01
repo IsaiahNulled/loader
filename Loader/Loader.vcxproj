@@ -58,7 +58,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;DISABLE_OUTPUT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -94,7 +94,7 @@
   <!-- Source Files -->
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="..\mapper\intel_driver.cpp" />
+    <ClCompile Include="..\mapper\dell_driver.cpp" />
     <ClCompile Include="..\mapper\mapper.cpp" />
     <ClCompile Include="..\mapper\service.cpp" />
     <ClCompile Include="..\mapper\utils.cpp" />

@@ -1,0 +1,54 @@
+{
+  "full": {
+    "loader": {
+      "key": "6e450e31b99f5ee6ad602b24541d295fdd3a75ed3a730432bc76c85dd4b2b556",
+      "iv": "46d1ac6db002552b0f15b570",
+      "tag": "2180a8d902439fbda78db4a08d85ae52",
+      "sha256": "06d7dac615c41f1280b68f4670ca3223255a4507c08a6b0bc5cf8bff3e48f968",
+      "plaintext_size": 298496,
+      "encrypted_size": 298512
+    },
+    "user": {
+      "key": "7f57a2ce9c71a135a515b07f70a1db24ded5f9a784be714f049af79f91265926",
+      "iv": "d6dab73faac64841bd55115c",
+      "tag": "d17ea9c293674a2453b56b3b8b0cdb2e",
+      "sha256": "cf5a208dcebcf65f2e5ea147d2960b194361bfa7ff6004e9cdd459c6c65a1cdf",
+      "plaintext_size": 11758080,
+      "encrypted_size": 11758096
+    },
+    "driver": {
+      "key": "df0ab7a2cecd16ab45e9c4e25e6ee7ea37c0f6a8b5049f575268dbb183089ac5",
+      "iv": "a1dc629e151205ac3676fdfb",
+      "tag": "1ed10cee5967385cc2944c53a8b12902",
+      "sha256": "70c7c1b8552221b55ce0e5ba31c5cbc6396b00cfa7e22cad05556711b30afd39",
+      "plaintext_size": 19456,
+      "encrypted_size": 19472
+    }
+  },
+  "safe": {
+    "loader": {
+      "key": "12f27380d15675c765fc9bfbcb083629781c8558d51621fe517a1aa37cb5259d",
+      "iv": "5ffe07bd84b3ff92cded69f3",
+      "tag": "b6248a923e4dbede0a141c49b88e79ae",
+      "sha256": "6180ffce1665386dd7e2929f7563a81ab25c7a12e59ef72cae4322e36511a25a",
+      "plaintext_size": 298496,
+      "encrypted_size": 298512
+    },
+    "user": {
+      "key": "a82387102fd095889443f68fcd784816a0aa63e052365c0cb9ed5db8dda94b58",
+      "iv": "dd23f0b167842a9d1f085a5c",
+      "tag": "6bd7b72a76722cf7a7078b8eac472aa9",
+      "sha256": "0a4c1f16aea3694dd90301e98bfb9fff6e04d84766c121ad7f453d32c1c62edb",
+      "plaintext_size": 11723776,
+      "encrypted_size": 11723792
+    },
+    "driver": {
+      "key": "117867f70c59166aabd981a58b0c99cee3bba95f1a7637f61462d81c6c17da5f",
+      "iv": "f4e0bef0ca0122c6940047a7",
+      "tag": "25115f183788697a21ce10d12a6a7c99",
+      "sha256": "79265285ef0bcc27243fa850f1471e6b4bd235c95f745a64b1874bf08c3aa16b",
+      "plaintext_size": 17920,
+      "encrypted_size": 17936
+    }
+  }
+}

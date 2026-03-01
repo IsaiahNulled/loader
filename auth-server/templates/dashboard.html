@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jew Ware - Admin Panel</title>
+<title>Admin Panel</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -130,6 +130,15 @@ tr:hover td{background:rgba(74,222,128,0.02)}
 
 .empty-state{text-align:center;padding:40px;color:var(--text3);font-size:13px}
 
+/* ── Discord user display ── */
+.discord-user{display:flex;align-items:center;gap:8px}
+.discord-avatar{width:26px;height:26px;border-radius:50%;border:2px solid var(--border2);object-fit:cover;flex-shrink:0}
+.discord-name{font-size:12px;font-weight:500;color:var(--text)}
+.discord-id-sub{font-size:10px;color:var(--text3);font-family:Consolas,monospace}
+
+/* ── Nav badge ── */
+.nav-badge{margin-left:auto;background:var(--green-dim2);color:var(--green);font-size:10px;padding:1px 6px;border-radius:10px;font-weight:600}
+
 /* ── Responsive ── */
 @media(max-width:1000px){.stats{grid-template-columns:repeat(2,1fr)}}
 </style>
@@ -154,21 +163,19 @@ tr:hover td{background:rgba(74,222,128,0.02)}
 <!-- Sidebar -->
 <div class="sidebar">
     <div class="sidebar-brand">
-        <span class="brand-icon">JW</span>
-        <span class="brand-text">Jew <span>Ware</span></span>
-    </div>
-    <div class="sidebar-workspace">
-        <div class="ws-label">Portal</div>
-        <div class="ws-name">JewWareAdminPortal.com</div>
+        <span class="brand-icon">AP</span>
+        <span class="brand-text">Admin <span>Panel</span></span>
     </div>
     <div class="sidebar-nav">
         <div class="nav-item active" data-page="dashboard"><svg><use href="#ico-grid"/></svg> Overview</div>
         <div class="nav-item" data-page="keys"><svg><use href="#ico-key"/></svg> Keys & Licenses</div>
-        <div class="nav-item" data-page="sessions"><svg><use href="#ico-users"/></svg> Live Sessions</div>
+        <div class="nav-item" data-page="sessions"><svg><use href="#ico-users"/></svg> Live Sessions <span class="nav-badge" id="nav-session-count">0</span></div>
         <div class="nav-item" data-page="injections"><svg><use href="#ico-zap"/></svg> Injection Logs</div>
         <div class="nav-item" data-page="logs"><svg><use href="#ico-list"/></svg> Auth Logs</div>
+        <div class="nav-item" data-page="tokens"><svg><use href="#ico-inject"/></svg> Download Tokens</div>
     </div>
     <div class="sidebar-footer"><span class="status-dot"></span>Server Online &nbsp;|&nbsp; <a href="/logout" style="color:var(--text3);text-decoration:none;font-size:11px">Logout</a></div>
+    <div class="sidebar-footer" style="font-size:10px;color:var(--text3);padding-top:4px">Domain: <span id="public-domain">{{ domain }}</span></div>
 </div>
 
 <!-- Main Content -->
@@ -225,7 +232,7 @@ tr:hover td{background:rgba(74,222,128,0.02)}
             <button class="btn btn-danger" onclick="killAllSessions()"><svg style="width:14px;height:14px"><use href="#ico-skull"/></svg> Kill All Sessions</button>
         </div>
         <div class="panel">
-            <table><thead><tr><th>License Key</th><th>Discord ID</th><th>Windows Email</th><th>HWID</th><th>IP</th><th>Last Seen</th><th>Status</th><th style="width:100px">Actions</th></tr></thead>
+            <table><thead><tr><th>License Key</th><th>Discord User</th><th>Windows Email</th><th>HWID</th><th>IP</th><th>Last Seen</th><th>Status</th><th style="width:100px">Actions</th></tr></thead>
             <tbody id="sessions-table"><tr><td colspan="8" class="empty-state">Loading...</td></tr></tbody></table>
             <div class="table-footer"><span id="sessions-count">0 active sessions</span><div></div></div>
         </div>
@@ -243,7 +250,7 @@ tr:hover td{background:rgba(74,222,128,0.02)}
             </select>
         </div>
         <div class="panel">
-            <table><thead><tr><th>Time</th><th>License Key</th><th>Discord ID</th><th>Windows Email</th><th>HWID</th><th>IP Address</th></tr></thead>
+            <table><thead><tr><th>Time</th><th>License Key</th><th>Discord User</th><th>Windows Email</th><th>HWID</th><th>IP Address</th></tr></thead>
             <tbody id="inject-logs-table"><tr><td colspan="6" class="empty-state">Loading...</td></tr></tbody></table>
             <div class="table-footer"><span id="inject-logs-count">0 entries</span><div></div></div>
         </div>
@@ -264,6 +271,24 @@ tr:hover td{background:rgba(74,222,128,0.02)}
             <table><thead><tr><th>Time</th><th>Action</th><th>License Key</th><th>IP Address</th><th>Status</th><th>Details</th></tr></thead>
             <tbody id="logs-table"><tr><td colspan="6" class="empty-state">Loading...</td></tr></tbody></table>
             <div class="table-footer"><span id="logs-count">0 entries</span><div></div></div>
+        </div>
+    </div>
+
+    <!-- ═══ DOWNLOAD TOKENS ═══ -->
+    <div class="page" id="page-tokens">
+        <div class="page-header">
+            <div><h1>Download Tokens</h1><p>Track file download tokens issued to authenticated sessions</p></div>
+            <select id="token-log-limit" onchange="loadTokens()" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-size:12px;cursor:pointer">
+                <option value="25">Last 25</option>
+                <option value="50" selected>Last 50</option>
+                <option value="100">Last 100</option>
+                <option value="250">Last 250</option>
+            </select>
+        </div>
+        <div class="panel">
+            <table><thead><tr><th>Time</th><th>Token</th><th>License Key</th><th>Build</th><th>File</th><th>HWID</th><th>Status</th></tr></thead>
+            <tbody id="tokens-table"><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody></table>
+            <div class="table-footer"><span id="tokens-count">0 entries</span><div></div></div>
         </div>
     </div>
 </div>
@@ -292,6 +317,54 @@ tr:hover td{background:rgba(74,222,128,0.02)}
 <script>
 let allKeys = [];
 let openMenu = null;
+const discordCache = {};  // {discord_id: {username, avatar_url}}
+
+/* ── Discord user resolution ── */
+async function resolveDiscord(discordId) {
+    if (!discordId) return null;
+    if (discordCache[discordId]) return discordCache[discordId];
+    try {
+        const r = await fetch('/api/admin/discord-user/' + discordId, { credentials: 'same-origin' });
+        const data = await r.json();
+        if (data.success) {
+            discordCache[discordId] = { username: data.username, avatar_url: data.avatar_url };
+            return discordCache[discordId];
+        }
+    } catch (e) {}
+    // Fallback: cache the ID itself so we don't retry and don't stay on "Loading..."
+    discordCache[discordId] = { username: discordId, avatar_url: '' };
+    return discordCache[discordId];
+}
+
+function renderDiscordCell(discordId) {
+    if (!discordId) return '<span style="color:var(--text3)">-</span>';
+    const cached = discordCache[discordId];
+    if (cached) {
+        return `<div class="discord-user">
+            <img class="discord-avatar" src="${cached.avatar_url}" onerror="this.style.display='none'">
+            <div><div class="discord-name">${cached.username}</div><div class="discord-id-sub">${discordId}</div></div>
+        </div>`;
+    }
+    return `<div class="discord-user" data-discord-id="${discordId}">
+        <div style="width:26px;height:26px;border-radius:50%;background:var(--surface2);flex-shrink:0"></div>
+        <div><div class="discord-name" style="color:var(--text2)">Loading...</div><div class="discord-id-sub">${discordId}</div></div>
+    </div>`;
+}
+
+async function resolveAllDiscordInPage() {
+    const els = document.querySelectorAll('[data-discord-id]');
+    const ids = [...new Set([...els].map(el => el.dataset.discordId).filter(Boolean))];
+    await Promise.all(ids.map(id => resolveDiscord(id)));
+    els.forEach(el => {
+        const id = el.dataset.discordId;
+        const cached = discordCache[id];
+        if (cached) {
+            el.innerHTML = `<img class="discord-avatar" src="${cached.avatar_url}" onerror="this.style.display='none'">
+                <div><div class="discord-name">${cached.username}</div><div class="discord-id-sub">${id}</div></div>`;
+            el.removeAttribute('data-discord-id');
+        }
+    });
+}
 
 /* ── API helper (session-based auth — cookie sent automatically) ── */
 async function api(method, path, data) {
@@ -326,6 +399,7 @@ document.querySelectorAll('.nav-item').forEach(n => {
         if (page === 'sessions') loadSessions();
         if (page === 'injections') loadInjectionLogs();
         if (page === 'logs') loadLogs();
+        if (page === 'tokens') loadTokens();
     });
 });
 
@@ -394,6 +468,7 @@ async function loadDashboard() {
     }
     if (sessions?.sessions) {
         document.getElementById('stat-sessions').textContent = sessions.sessions.length;
+        document.getElementById('nav-session-count').textContent = sessions.sessions.length;
     }
     if (logs?.logs) {
         const tbody = document.getElementById('dash-logs');
@@ -531,8 +606,10 @@ async function generateKeys() {
 async function loadSessions() {
     const r = await api('GET', '/sessions');
     if (!r?.sessions) return;
+    const count = r.sessions.length;
+    document.getElementById('nav-session-count').textContent = count;
     const tbody = document.getElementById('sessions-table');
-    if (r.sessions.length === 0) {
+    if (count === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No active sessions</td></tr>';
         document.getElementById('sessions-count').textContent = '0 active sessions';
         return;
@@ -546,7 +623,7 @@ async function loadSessions() {
             : `<button class="btn btn-danger btn-sm" onclick="terminateSession('${s.session_id}')"><svg style="width:12px;height:12px"><use href="#ico-skull"/></svg> Terminate</button>`;
         return `<tr>
             <td><span class="copy-wrap"><span class="key-text">${s.license}</span><button class="copy-btn" onclick="copyText('${s.license}')"><svg><use href="#ico-copy"/></svg></button></span></td>
-            <td><span class="copy-wrap" style="color:var(--blue);font-family:Consolas,monospace;font-size:12px">${s.discord_id || '<span style="color:var(--text3)">-</span>'}</span></td>
+            <td>${renderDiscordCell(s.discord_id)}</td>
             <td style="font-size:12px;color:var(--text2)">${s.windows_email || '-'}</td>
             <td><span class="copy-wrap"><span style="font-size:11px;color:var(--text2);font-family:Consolas,monospace">${s.hwid || '-'}</span>${s.hwid ? `<button class="copy-btn" onclick="copyText('${s.hwid}')"><svg><use href="#ico-copy"/></svg></button>` : ''}</span></td>
             <td style="color:var(--text2);font-size:12px">${s.ip}</td>
@@ -555,7 +632,8 @@ async function loadSessions() {
             <td>${terminateBtn}</td>
         </tr>`;
     }).join('');
-    document.getElementById('sessions-count').textContent = r.sessions.length + ' active session' + (r.sessions.length !== 1 ? 's' : '');
+    document.getElementById('sessions-count').textContent = count + ' active session' + (count !== 1 ? 's' : '');
+    resolveAllDiscordInPage();
 }
 
 async function terminateSession(sessionId) {
@@ -591,12 +669,13 @@ async function loadInjectionLogs() {
     tbody.innerHTML = r.logs.map(l => `<tr>
         <td style="font-size:12px;color:var(--text2)">${fmtDate(l.time)}</td>
         <td><span class="copy-wrap"><span class="key-text">${l.key || '-'}</span><button class="copy-btn" onclick="copyText('${l.key}')"><svg><use href="#ico-copy"/></svg></button></span></td>
-        <td><span style="color:var(--blue);font-family:Consolas,monospace;font-size:12px">${l.discord_id || '<span style="color:var(--text3)">-</span>'}</span></td>
+        <td>${renderDiscordCell(l.discord_id)}</td>
         <td style="font-size:12px;color:var(--text2)">${l.windows_email || '-'}</td>
         <td><span style="font-size:11px;color:var(--text2);font-family:Consolas,monospace">${l.hwid || '-'}</span></td>
         <td style="color:var(--text2);font-size:12px">${l.ip || '-'}</td>
     </tr>`).join('');
     document.getElementById('inject-logs-count').textContent = r.logs.length + ' entries';
+    resolveAllDiscordInPage();
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -624,6 +703,38 @@ async function loadLogs() {
 }
 
 
+/* ══════════════════════════════════════════════════════════════
+ *  DOWNLOAD TOKENS
+ * ══════════════════════════════════════════════════════════════ */
+async function loadTokens() {
+    const limit = document.getElementById('token-log-limit').value;
+    const r = await api('GET', '/download-tokens?limit=' + limit);
+    if (!r?.tokens) return;
+    const tbody = document.getElementById('tokens-table');
+    if (r.tokens.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No download tokens yet</td></tr>';
+        document.getElementById('tokens-count').textContent = '0 entries';
+        return;
+    }
+    tbody.innerHTML = r.tokens.map(t => {
+        const statusBadge = t.status === 'used' ? '<span class="badge badge-green">Used</span>'
+            : t.status === 'expired' ? '<span class="badge badge-yellow">Expired</span>'
+            : '<span class="badge badge-blue">Active</span>';
+        const buildBadge = t.build === 'full' ? '<span class="badge badge-green">Full</span>'
+            : '<span class="badge badge-blue">Safe</span>';
+        return `<tr>
+            <td style="font-size:12px;color:var(--text2)">${fmtDate(t.created)}</td>
+            <td><span class="key-text">${t.token}</span></td>
+            <td><span class="key-text">${t.license}</span></td>
+            <td>${buildBadge}</td>
+            <td style="font-size:12px">${t.file_type}</td>
+            <td><span style="font-size:11px;color:var(--text2);font-family:Consolas,monospace">${t.hwid}</span></td>
+            <td>${statusBadge}</td>
+        </tr>`;
+    }).join('');
+    document.getElementById('tokens-count').textContent = r.tokens.length + ' entries';
+}
+
 /* ── Modal close on overlay click ── */
 document.querySelectorAll('.modal-overlay').forEach(m => {
     m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
@@ -636,6 +747,7 @@ setInterval(() => {
     if (active?.id === 'page-dashboard') loadDashboard();
     if (active?.id === 'page-sessions') loadSessions();
     if (active?.id === 'page-injections') loadInjectionLogs();
+    if (active?.id === 'page-tokens') loadTokens();
 }, 10000);
 </script>
 </body>

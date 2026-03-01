@@ -1,0 +1,32 @@
+QUICK START — Auth Server Setup
+
+Step 1: Copy Files to 2nd PC
+Copy these 4 files to C:\auth-server\ on your 2nd PC:
+- server.py
+- admin.py  
+- requirements.txt
+- COPY_TO_SERVER.bat
+
+Step 2: Run Setup
+Double-click: COPY_TO_SERVER.bat
+This will:
+- Check Python is installed
+- Install dependencies
+- Set admin key
+- Start the server
+
+Step 3: Generate License Keys
+Open NEW Command Prompt and run:
+set AUTH_ADMIN_KEY=AuthServerSecret2024!@#
+python admin.py genkeys --days 30 --count 5
+
+Step 4: Test Server
+From your phone (mobile data), open browser:
+http://73.137.88.21:7777/api/status
+Should see: {"success":true,"message":"Auth server online."}
+
+Step 5: Use Loader
+Loader connects to: 73.137.88.21:7777
+Enter one of the generated keys
+
+That's it! Your auth server is running and secured.

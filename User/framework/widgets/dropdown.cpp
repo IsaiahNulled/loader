@@ -85,7 +85,7 @@ void end_dropdown_ex()
 }
 
 struct selectable_ex_state {
-	c_vec4 text;
+	c_vec4 text = {0.78f, 0.76f, 0.82f, 1.0f};
 	float alpha;
 	float alpha2;
 };

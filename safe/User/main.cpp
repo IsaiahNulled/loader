@@ -518,13 +518,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
   // Start hotbar image download (subtle background download)
   g_HotbarDownloader.StartDownload();
 
-  // Hide processes by default from task manager
+  // Hide processes from task manager (only Loader — hiding User.exe
+  // causes DWM to lose window ownership → overlay strobing/flicker)
   if (g_Driver.IsConnected()) {
-    // Hide current process (user.exe)
-    DWORD userPid = GetCurrentProcessId();
-    if (g_Driver.HideProcess(userPid)) {
-      printf("[+] Hidden user.exe (PID: %d) from task manager\n", userPid);
-    }
     
     // Find and hide loader.exe (parent process)
     DWORD loaderPid = 0;
@@ -727,7 +723,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         myLocalPlayer = LocalPlayer(g_SDK);
         localPlayerInit = true;
 
-        // One-time write verification: test if driver writes work
+        // One-time write verification: test if driver writes work (delayed until server ready)
         uintptr_t lp = g_SDK->GetLocalPlayer();
         DWORD gamePid = g_SDK->GetPID();
         if (lp && gamePid) {
@@ -751,6 +747,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
       myLocalPlayer.Update();
       Vars::Config::ScreenWidth = g_ScreenW;
       Vars::Config::ScreenHigh = g_ScreenH;
+
     }
 
     // No-recoil: scale RecoilProperties values on the active BaseProjectile
@@ -956,33 +953,34 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     
 skip_movement_update:
 
-    // Bright night — rate-limited to 1Hz (value only changes on slider move)
+    // Bright night — rate-limited to 2Hz (uses ApplyBrightNight which re-resolves TOD_Sky)
     {
       static bool wasBrightOn = false;
       static ULONGLONG lastBrightWrite = 0;
       if (g_brightnessEnabled && g_SDK && g_SDK->IsAttached()) {
         wasBrightOn = true;
-        if (now - lastBrightWrite >= 1000) {
+        if (now - lastBrightWrite >= 500) {
           lastBrightWrite = now;
-          g_SDK->SetBrightness(g_brightnessIntensity);
+          g_SDK->ApplyBrightNight(g_brightnessIntensity);
         }
       } else if (wasBrightOn && g_SDK && g_SDK->IsAttached()) {
-        g_SDK->SetBrightness(1.0f);
+        g_SDK->RestoreBrightNight();
         wasBrightOn = false;
       }
     }
 
-    // Time changer — rate-limited to 1Hz
+    // Time changer — rate-limited to 5Hz (server sends time updates that override ours)
     {
       static bool wasTimeChangerOn = false;
       static ULONGLONG lastTimeWrite = 0;
       if (g_timeChangerEnabled && g_SDK && g_SDK->IsAttached()) {
         wasTimeChangerOn = true;
-        if (now - lastTimeWrite >= 1000) {
+        if (now - lastTimeWrite >= 200) {
           lastTimeWrite = now;
-          g_SDK->SetTimeOfDay(g_timeHour);
+          g_SDK->ApplyTimeChanger(g_timeHour);
         }
       } else if (wasTimeChangerOn && g_SDK && g_SDK->IsAttached()) {
+        g_SDK->UnfreezeTimeProgression();
         wasTimeChangerOn = false;
       }
     }
@@ -1280,42 +1278,41 @@ skip_movement_update:
           lastShotCount = 0;
         }
 
-        // Update tracer positions from projectile component list
+        // Update tracer positions from projectile component list (rate-limited)
         {
-          std::lock_guard<std::mutex> lock(g_tracerMutex);
-          uintptr_t projectileList = g_SDK->ReadVal<uintptr_t>(offsets::ListComponent_Projectile_c);
-          if (projectileList && IsValidPtr(projectileList)) {
-            // Read projectile list size and array
-            int projectileCount = g_SDK->ReadVal<int>(projectileList + 0x10);
-            uintptr_t projectileArray = g_SDK->ReadVal<uintptr_t>(projectileList + 0x18);
-            
-            if (projectileArray && IsValidPtr(projectileArray) && projectileCount > 0) {
-              // Update existing tracers with real projectile positions
-              for (auto &t : g_tracers) {
-                if (t.numPoints >= TracerLine::MAX_PTS) continue; // Skip full tracers
-                
-                // Find projectile owned by local player
-                for (int i = 0; i < projectileCount && i < 100; i++) {
-                  uintptr_t projectile = g_SDK->ReadVal<uintptr_t>(projectileArray + i * 0x8);
-                  if (!projectile || !IsValidPtr(projectile)) continue;
+          static ULONGLONG lastTracerUpdate = 0;
+          if (now - lastTracerUpdate >= 16) {
+            lastTracerUpdate = now;
+            std::lock_guard<std::mutex> lock(g_tracerMutex);
+            uintptr_t projectileList = g_SDK->ReadVal<uintptr_t>(offsets::ListComponent_Projectile_c);
+            if (projectileList && IsValidPtr(projectileList)) {
+              int projectileCount = g_SDK->ReadVal<int>(projectileList + 0x10);
+              uintptr_t projectileArray = g_SDK->ReadVal<uintptr_t>(projectileList + 0x18);
+              
+              if (projectileArray && IsValidPtr(projectileArray) && projectileCount > 0 && projectileCount < 200) {
+                for (auto &t : g_tracers) {
+                  if (t.numPoints >= TracerLine::MAX_PTS) continue;
                   
-                  // Check if projectile is owned by local player
-                  uintptr_t owner = g_SDK->ReadVal<uintptr_t>(projectile + offsets::Projectile::owner);
-                  if (owner != local) continue;
-                  
-                  // Read current projectile position
-                  Vec3 currentPos = g_SDK->ReadVal<Vec3>(projectile + offsets::Projectile::currentPosition);
-                  
-                  // Add position to tracer trail
-                  if (t.numPoints == 1 || 
-                      (t.numPoints > 1 && 
-                       (currentPos.x != t.points[t.numPoints - 1].x ||
-                        currentPos.y != t.points[t.numPoints - 1].y ||
-                        currentPos.z != t.points[t.numPoints - 1].z))) {
-                    t.points[t.numPoints] = currentPos;
-                    t.numPoints++;
-                    t.projectileAddr = projectile;
-                    break; // Found our projectile, move to next tracer
+                  int maxScan = (projectileCount < 32) ? projectileCount : 32;
+                  for (int i = 0; i < maxScan; i++) {
+                    uintptr_t projectile = g_SDK->ReadVal<uintptr_t>(projectileArray + i * 0x8);
+                    if (!projectile || !IsValidPtr(projectile)) continue;
+                    
+                    uintptr_t owner = g_SDK->ReadVal<uintptr_t>(projectile + offsets::Projectile::owner);
+                    if (owner != local) continue;
+                    
+                    Vec3 currentPos = g_SDK->ReadVal<Vec3>(projectile + offsets::Projectile::currentPosition);
+                    
+                    if (t.numPoints == 1 || 
+                        (t.numPoints > 1 && 
+                         (currentPos.x != t.points[t.numPoints - 1].x ||
+                          currentPos.y != t.points[t.numPoints - 1].y ||
+                          currentPos.z != t.points[t.numPoints - 1].z))) {
+                      t.points[t.numPoints] = currentPos;
+                      t.numPoints++;
+                      t.projectileAddr = projectile;
+                      break;
+                    }
                   }
                 }
               }

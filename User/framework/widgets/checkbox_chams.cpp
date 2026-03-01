@@ -32,8 +32,14 @@ bool c_widgets::checkbox_chams(std::string name) {
   if (pressed)
     *enabled = !*enabled;
 
-  gui->easing(state->text, *enabled ? clr->white.Value : clr->text.Value, 24.f,
-              dynamic_easing);
+  // Snap text color on first frame to avoid easing from black
+  {
+    ImVec4 target_text = *enabled ? clr->white.Value : clr->text.Value;
+    if (state->text.x == 0.f && state->text.y == 0.f && state->text.z == 0.f && state->text.w == 0.f)
+      state->text = target_text;
+    else
+      gui->easing(state->text, target_text, 24.f, dynamic_easing);
+  }
   gui->easing(state->alpha, *enabled ? 1.f : 0.f, 24.f, dynamic_easing);
 
   // Draw checkbox body
@@ -110,21 +116,9 @@ bool c_widgets::checkbox_chams(std::string name) {
 
       // Material options shared by both sections
       const struct { const char* name; unsigned int id; } materials[] = {
-        {"Solid White", 763998},
-        {"Glow Red", 518638},
-        {"Glow Green", 232168},
-        {"Neon Purple", 102998},
-        {"Green Glow", 98400},
-        {"Red Glow", 98648},
-        {"Emissive Light", 907390},
-        {"Glow", 1254166},
-        {"Blue Emissive", 134056},
-        {"Green Emissive", 1364844},
-        {"Laser Green", 84446},
-        {"Laser Blue", 84438},
-        {"Holographic", 1348630}
+        {"Red", 1294354},{"Blue", 730730},{"Wireframe", 1348630}
       };
-      const int matCount = 13;
+      const int matCount = 3;
 
       // ═══════════════════════════════════
       // SECTION: Player Chams Material
@@ -216,21 +210,9 @@ bool c_widgets::checkbox_chams(std::string name) {
 
       // Hand chams material list
       const struct { const char* name; unsigned int id; } vmMaterials[] = {
-        {"Solid White", 763998},
-        {"Glow Red", 518638},
-        {"Glow Green", 232168},
-        {"Neon Purple", 102998},
-        {"Green Glow", 98400},
-        {"Red Glow", 98648},
-        {"Emissive Light", 907390},
-        {"Glow", 1254166},
-        {"Blue Emissive", 134056},
-        {"Green Emissive", 1364844},
-        {"Laser Green", 84446},
-        {"Laser Blue", 84438},
-        {"Holographic", 1348630}
+        {"Red", 1294354},{"Blue", 730730},{"Wireframe", 1348630}
       };
-      const int vmMatCount = 13;
+      const int vmMatCount = 3;
 
       for (int i = 0; i < vmMatCount; i++) {
         c_vec2 itemPos = pw->DC.CursorPos;

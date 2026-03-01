@@ -1,0 +1,2 @@
+C:\Users\Isaiah\Desktop\external\driver\x64\Release\driver.sys
+C:\Users\Isaiah\Desktop\external\full\driver\x64\Release\driver.sys
