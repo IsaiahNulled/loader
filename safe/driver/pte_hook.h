@@ -40,6 +40,26 @@ static BOOLEAN AvoidLargePageManipulation() {
     return FALSE;
 }
 
+// Check if we should completely disable PTE hooking (for problematic builds)
+static BOOLEAN ShouldDisablePteHooking() {
+    RTL_OSVERSIONINFOW versionInfo = { 0 };
+    versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+    
+    if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
+        // Windows 10 22H2 (build 19045) is causing PAGE_FAULT_IN_NONPAGED_AREA
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19045) {
+            return TRUE; // Disable PTE hooking entirely on build 19045+
+        }
+        
+        // Also disable on other problematic builds
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041 && versionInfo.dwBuildNumber < 19042) {
+            return TRUE; // Early 2004 builds
+        }
+    }
+    
+    return FALSE;
+}
+
 extern "C" NTKERNELAPI ULONG_PTR KeIpiGenericCall(
     PKIPI_BROADCAST_WORKER BroadcastFunction, ULONG_PTR Context);
 

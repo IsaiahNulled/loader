@@ -20,6 +20,13 @@ BOOL Hook::Install(void* handlerAddr)
 
     InitSpoofCall();
 
+    // Check if we should completely disable PTE hooking for this build
+    if (ShouldDisablePteHooking()) {
+        // On Windows 10 build 19045+, PTE hooking causes PAGE_FAULT_IN_NONPAGED_AREA
+        // Return success but don't install hook - driver loads but no kernel features
+        return TRUE;
+    }
+
     // Always attempt hooking but use enhanced safety measures on Windows 10/11
     // The PTE hook implementation now includes Windows 10 compatibility fixes
 
