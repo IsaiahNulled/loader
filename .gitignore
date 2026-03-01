@@ -45,7 +45,6 @@ __pycache__/
 # Config files with sensitive data
 discord-bot/keys.json
 discord-bot/config.json
-auth-server/build_keys.json
 
 # IDE files
 *.swp
