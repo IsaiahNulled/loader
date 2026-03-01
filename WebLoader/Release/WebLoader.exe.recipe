@@ -2,7 +2,7 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>c:\Users\Isaiah\Desktop\external\WebLoader\x64\Release\WebLoader.exe</FullPath>
+      <FullPath>C:\Users\Isaiah\Desktop\external\WebLoader\x64\Release\WebLoader.exe</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />
