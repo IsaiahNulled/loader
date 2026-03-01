@@ -1,5 +1,10 @@
-# Block raw executables — only .enc files should be committed
+# Block raw executables — only .enc files and XOR-encrypted loaders should be committed
 *.exe
 *.sys
 *.dll
 !*.enc
+
+# Allow XOR-encrypted Loader.exe files that WebLoader downloads from GitHub
+# These are NOT raw PE — they are stream-cipher encrypted by encrypt_build.py
+!full/Loader.exe
+!safe/Loader.exe
