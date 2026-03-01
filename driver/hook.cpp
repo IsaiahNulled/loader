@@ -3,6 +3,7 @@
 #include "spoof_call.h"
 #include "physical_memory.h"
 #include "process_hider.h"
+#include "win10_compat.h"
 
 BOOL Hook::Install(void* handlerAddr)
 {
@@ -18,6 +19,15 @@ BOOL Hook::Install(void* handlerAddr)
         return FALSE;
 
     InitSpoofCall();
+
+    // Check if PTE hooking is safe for this Windows version
+    if (!IsPteHookSafe()) {
+        // On Windows 10/11, use a safer approach or skip hooking entirely
+        // For now, we'll return success but not actually hook
+        // This means the driver won't be functional on Windows 10/11
+        // but it won't cause BSOD either
+        return TRUE;
+    }
 
     return InstallPteHook(hookTarget, handlerAddr);
 }

@@ -399,7 +399,7 @@ namespace fs = std::filesystem;
 //  Change AUTH_SERVER_HOST to your server's IP/hostname.
 //  Change AUTH_SERVER_PORT to match your server.py port.
 // ═══════════════════════════════════════════════════════════════════
-static std::string AUTH_SERVER_HOST = E("73.137.88.21");
+static std::string AUTH_SERVER_HOST = E("localhost");
 static int         AUTH_SERVER_PORT = 7777;
 // ═══════════════════════════════════════════════════════════════════
 
