@@ -48,7 +48,7 @@ WEB_ADMIN_PASSWORD = os.environ.get("WEB_ADMIN_PASSWORD", "admin")
 
 # ── Build Keys (AES-256-GCM keys for encrypted payloads) ──────────
 BUILD_KEYS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build_keys.json")
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/IsaiahNulled/loader/main"
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/IsaiahNulled/loader/master"
 
 # ── Discord Bot Token (for resolving user IDs to names + avatars) ────
 DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")

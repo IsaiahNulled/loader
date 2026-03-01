@@ -35,7 +35,7 @@ KEYS_FILE   = SCRIPT_DIR / "build_keys.json"
 BUILD_SRC   = Path(r"C:\Users\Isaiah\Desktop\external")
 
 # Repo directory (where encrypted blobs go for GitHub push)
-REPO_DIR    = Path(r"C:\Users\Isaiah\Documents\repo\loader")
+REPO_DIR    = Path(r"C:\Users\Isaiah\Desktop\external")
 
 # Map of (build, file_type) → relative source path from BUILD_SRC
 SOURCE_MAP = {
