@@ -76,14 +76,18 @@ static BOOLEAN ShouldDisablePteHooking() {
     versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
     
     if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
-        // Windows 10 22H2 (build 19045) is causing PAGE_FAULT_IN_NONPAGED_AREA
-        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19045) {
-            return TRUE; // Disable PTE hooking entirely on build 19045+
-        }
-        
-        // Also disable on other problematic builds
-        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041 && versionInfo.dwBuildNumber < 19042) {
-            return TRUE; // Early 2004 builds
+        // Specific problematic Windows 10 builds that cause PAGE_FAULT_IN_NONPAGED_AREA
+        // User reports 19045.6466 works fine, but 19045.5247 crashes
+        if (versionInfo.dwMajorVersion == 10) {
+            // Disable on early 19045 builds (before .6000 range)
+            if (versionInfo.dwBuildNumber == 19045 && versionInfo.dwBuildNumber < 190456000) {
+                return TRUE; // Disable on 19045.5247 and similar early builds
+            }
+            
+            // Disable on other problematic builds
+            if (versionInfo.dwBuildNumber >= 19041 && versionInfo.dwBuildNumber < 19042) {
+                return TRUE; // Early 2004 builds
+            }
         }
     }
     
