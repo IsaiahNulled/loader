@@ -1,6 +1,5 @@
 #pragma once
 #include "definitions.h"
-#include "win10_compat.h"
 #include <intrin.h>
 
 extern "C" NTKERNELAPI ULONG_PTR KeIpiGenericCall(
@@ -149,13 +148,6 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
     if (!pdeEntry.Present)
         return FALSE;
 
-    // Windows 10 safety: Avoid large page manipulation on newer builds
-    if (pdeEntry.LargePage && AvoidLargePageManipulation()) {
-        // On problematic Windows 10 builds, skip large page splitting
-        // Fall back to direct PTE hooking (may not work but won't BSOD)
-        goto try_direct_pte;
-    }
-
     if (pdeEntry.LargePage) {
         PHYSICAL_ADDRESS low, high, boundary;
         low.QuadPart = 0;
@@ -197,16 +189,9 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
 
         KeLowerIrql(oldIrql);
 
-        // Windows 10 safety: Use safer flushing on newer builds
-        if (UseSafeFlushing()) {
-            // Use single CPU flush instead of IPI broadcast on Windows 10
-            __writecr3(__readcr3());
-        } else {
-            KeIpiGenericCall(FlushEntireTlbIpi, 0);
-        }
+        KeIpiGenericCall(FlushEntireTlbIpi, 0);
     }
 
-try_direct_pte:
     PPTE_ENTRY pte = GetPte((PVOID)pageBase);
     if (!pte || !MmIsAddressValid(pte))
         return FALSE;
@@ -264,13 +249,7 @@ try_direct_pte:
 
     KeLowerIrql(oldIrql);
 
-    // Windows 10 safety: Use safer flushing on newer builds
-    if (UseSafeFlushing()) {
-        // Use INVLPG instead of IPI on Windows 10 to avoid BSOD
-        __invlpg((PVOID)pageBase);
-    } else {
-        KeIpiGenericCall(FlushSinglePageIpi, pageBase);
-    }
+    KeIpiGenericCall(FlushSinglePageIpi, pageBase);
 
     g_PteHook.targetVA    = targetFunction;
     g_PteHook.pteAddress  = pte;
