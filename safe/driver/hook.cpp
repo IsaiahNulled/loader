@@ -4,25 +4,6 @@
 #include "physical_memory.h"
 #include "process_hider.h"
 
-// Windows 10 compatibility check
-static BOOLEAN IsPteHookSafe() {
-    RTL_OSVERSIONINFOW versionInfo = { 0 };
-    versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
-    
-    if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
-        // Disable PTE hooking on Windows 10 due to compatibility issues
-        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwMinorVersion == 0) {
-            return FALSE; // Windows 10 - use safer method
-        }
-        
-        // Also disable on Windows 11 for now
-        if (versionInfo.dwMajorVersion >= 10 && versionInfo.dwBuildNumber >= 22000) {
-            return FALSE; // Windows 11+ - use safer method
-        }
-    }
-    
-    return TRUE; // Allow on older systems (Windows 7/8/8.1)
-}
 
 BOOL Hook::Install(void* handlerAddr)
 {
@@ -39,11 +20,8 @@ BOOL Hook::Install(void* handlerAddr)
 
     InitSpoofCall();
 
-    // Check if PTE hooking is safe for this Windows version
-    if (!IsPteHookSafe()) {
-        // On Windows 10/11, skip hooking to prevent BSOD
-        return TRUE;
-    }
+    // Always attempt hooking but use enhanced safety measures on Windows 10/11
+    // The PTE hook implementation now includes Windows 10 compatibility fixes
 
     return InstallPteHook(hookTarget, handlerAddr);
 }

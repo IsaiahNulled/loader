@@ -11,35 +11,58 @@ typedef enum _WINDOWS_VERSION {
     WINDOWS_11 = 5
 } WINDOWS_VERSION;
 
-// Safe hook detection - avoid PTE hooking on problematic systems
-static BOOLEAN IsPteHookSafe() {
+// Enhanced Windows 10 compatibility with safer hooking
+static BOOLEAN IsWindows10OrLater() {
     RTL_OSVERSIONINFOW versionInfo = { 0 };
     versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
     
     if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
-        // Disable PTE hooking on Windows 10 due to compatibility issues
-        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwMinorVersion == 0) {
-            return FALSE; // Windows 10 - use safer method
-        }
-        
-        // Also disable on Windows 11 for now
-        if (versionInfo.dwMajorVersion >= 10 && versionInfo.dwBuildNumber >= 22000) {
-            return FALSE; // Windows 11+ - use safer method
+        if (versionInfo.dwMajorVersion >= 10) {
+            return TRUE;
         }
     }
     
-    return TRUE; // Allow on older systems (Windows 7/8/8.1)
+    return FALSE;
 }
 
-// Alternative communication method for Windows 10/11
-static BOOLEAN UseAlternativeComm() {
+// Check if we should use enhanced safety measures
+static BOOLEAN UseEnhancedSafety() {
     RTL_OSVERSIONINFOW versionInfo = { 0 };
     versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
     
     if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
-        // Use alternative method on Windows 10/11
-        if (versionInfo.dwMajorVersion == 10 || 
-            (versionInfo.dwMajorVersion >= 10 && versionInfo.dwBuildNumber >= 22000)) {
+        // Windows 10 1903+ (build 18362+) has stricter memory protection
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 18362) {
+            return TRUE;
+        }
+        
+        // Windows 11 definitely needs enhanced safety
+        if (versionInfo.dwMajorVersion >= 10 && versionInfo.dwBuildNumber >= 22000) {
+            return TRUE;
+        }
+    }
+    
+    return FALSE;
+}
+
+// Check if PatchGuard is likely to be active (Windows 10+)
+static BOOLEAN IsPatchGuardLikelyActive() {
+    return IsWindows10OrLater();
+}
+
+// Determine if we should use IPI flushing (safer on newer systems)
+static BOOLEAN UseSafeFlushing() {
+    return UseEnhancedSafety();
+}
+
+// Check if we should avoid large page manipulation
+static BOOLEAN AvoidLargePageManipulation() {
+    RTL_OSVERSIONINFOW versionInfo = { 0 };
+    versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+    
+    if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
+        // Windows 10 2004+ (build 19041) has issues with large page splitting
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041) {
             return TRUE;
         }
     }

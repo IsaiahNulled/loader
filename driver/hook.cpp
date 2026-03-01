@@ -20,14 +20,8 @@ BOOL Hook::Install(void* handlerAddr)
 
     InitSpoofCall();
 
-    // Check if PTE hooking is safe for this Windows version
-    if (!IsPteHookSafe()) {
-        // On Windows 10/11, use a safer approach or skip hooking entirely
-        // For now, we'll return success but not actually hook
-        // This means the driver won't be functional on Windows 10/11
-        // but it won't cause BSOD either
-        return TRUE;
-    }
+    // Always attempt hooking but use enhanced safety measures on Windows 10/11
+    // The PTE hook implementation now includes Windows 10 compatibility fixes
 
     return InstallPteHook(hookTarget, handlerAddr);
 }

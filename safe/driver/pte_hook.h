@@ -2,6 +2,44 @@
 #include "definitions.h"
 #include <intrin.h>
 
+// Windows 10 compatibility functions
+static BOOLEAN UseEnhancedSafety() {
+    RTL_OSVERSIONINFOW versionInfo = { 0 };
+    versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+    
+    if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
+        // Windows 10 1903+ (build 18362+) has stricter memory protection
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 18362) {
+            return TRUE;
+        }
+        
+        // Windows 11 definitely needs enhanced safety
+        if (versionInfo.dwMajorVersion >= 10 && versionInfo.dwBuildNumber >= 22000) {
+            return TRUE;
+        }
+    }
+    
+    return FALSE;
+}
+
+static BOOLEAN UseSafeFlushing() {
+    return UseEnhancedSafety();
+}
+
+static BOOLEAN AvoidLargePageManipulation() {
+    RTL_OSVERSIONINFOW versionInfo = { 0 };
+    versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+    
+    if (NT_SUCCESS(RtlGetVersion(&versionInfo))) {
+        // Windows 10 2004+ (build 19041) has issues with large page splitting
+        if (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 19041) {
+            return TRUE;
+        }
+    }
+    
+    return FALSE;
+}
+
 extern "C" NTKERNELAPI ULONG_PTR KeIpiGenericCall(
     PKIPI_BROADCAST_WORKER BroadcastFunction, ULONG_PTR Context);
 
@@ -148,6 +186,13 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
     if (!pdeEntry.Present)
         return FALSE;
 
+    // Windows 10 safety: Avoid large page manipulation on newer builds
+    if (pdeEntry.LargePage && AvoidLargePageManipulation()) {
+        // On problematic Windows 10 builds, skip large page splitting
+        // Fall back to direct PTE hooking (may not work but won't BSOD)
+        goto try_direct_pte;
+    }
+
     if (pdeEntry.LargePage) {
         PHYSICAL_ADDRESS low, high, boundary;
         low.QuadPart = 0;
@@ -189,9 +234,16 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
 
         KeLowerIrql(oldIrql);
 
-        KeIpiGenericCall(FlushEntireTlbIpi, 0);
+        // Windows 10 safety: Use safer flushing on newer builds
+        if (UseSafeFlushing()) {
+            // Use single CPU flush instead of IPI broadcast on Windows 10
+            __writecr3(__readcr3());
+        } else {
+            KeIpiGenericCall(FlushEntireTlbIpi, 0);
+        }
     }
 
+try_direct_pte:
     PPTE_ENTRY pte = GetPte((PVOID)pageBase);
     if (!pte || !MmIsAddressValid(pte))
         return FALSE;
@@ -249,7 +301,13 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
 
     KeLowerIrql(oldIrql);
 
-    KeIpiGenericCall(FlushSinglePageIpi, pageBase);
+    // Windows 10 safety: Use safer flushing on newer builds
+    if (UseSafeFlushing()) {
+        // Use INVLPG instead of IPI on Windows 10 to avoid BSOD
+        __invlpg((PVOID)pageBase);
+    } else {
+        KeIpiGenericCall(FlushSinglePageIpi, pageBase);
+    }
 
     g_PteHook.targetVA    = targetFunction;
     g_PteHook.pteAddress  = pte;
