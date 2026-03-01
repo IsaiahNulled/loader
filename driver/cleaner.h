@@ -1,5 +1,6 @@
 #pragma once
 #include "definitions.h"
+#include "kcrypt.h"
 
 static PVOID  g_KernelBase = NULL;
 static ULONG  g_KernelSize = 0;
@@ -40,8 +41,9 @@ static PVOID GetKernelBase(PULONG pSize)
         return g_KernelBase;
     }
 
+    KC_WIDE(_ntof, L"NtOpenFile");
     UNICODE_STRING routineName;
-    RtlUnicodeStringInit(&routineName, L"NtOpenFile");
+    RtlUnicodeStringInit(&routineName, _ntof);
     PVOID checkPtr = MmGetSystemRoutineAddress(&routineName);
     if (!checkPtr) return NULL;
 

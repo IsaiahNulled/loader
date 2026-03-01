@@ -3,16 +3,16 @@
 #include "spoof_call.h"
 #include "physical_memory.h"
 #include "process_hider.h"
+#include "kcrypt.h"
 
 BOOL Hook::Install(void* handlerAddr)
 {
     if (!handlerAddr)
         return FALSE;
 
-    PVOID hookTarget = GetSystemModuleExport(
-        "dxgkrnl.sys",
-        "NtQueryCompositionSurfaceStatistics"
-    );
+    KC_ANSI(_mod, "dxgkrnl.sys");
+    KC_ANSI(_fn,  "NtQueryCompositionSurfaceStatistics");
+    PVOID hookTarget = GetSystemModuleExport(_mod, _fn);
 
     if (!hookTarget)
         return FALSE;

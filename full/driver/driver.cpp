@@ -2,10 +2,12 @@
 #include "hook.h"
 #include "cleaner.h"
 #include "process_hider.h"
+#include "kcrypt.h"
 
 static NTSTATUS RealEntry(PDRIVER_OBJECT DriverObject)
 {
     InitPoolTag();
+    kc::InitStateKey();
 
     if (!Hook::Install(&Hook::Handler)) {
         return STATUS_UNSUCCESSFUL;

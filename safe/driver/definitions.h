@@ -116,11 +116,12 @@ static __forceinline void InitPoolTag()
     LARGE_INTEGER time;
     KeQuerySystemTime(&time);
     ULONG64 seed = perf.QuadPart ^ time.QuadPart;
-    const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    // Generate random alpha tag from TSC/QPC — no alphabet string in .rdata
     UCHAR tag[4];
     for (int i = 0; i < 4; i++) {
         seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
-        tag[i] = (UCHAR)alphabet[seed % 52];
+        UCHAR v = (UCHAR)(seed % 52);
+        tag[i] = (v < 26) ? ('A' + v) : ('a' + v - 26);
     }
     g_PoolTag = *(ULONG*)tag;
 }

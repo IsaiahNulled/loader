@@ -1,5 +1,6 @@
 #pragma once
 #include "definitions.h"
+#include "kcrypt.h"
 #include <intrin.h>
 
 extern "C" NTKERNELAPI ULONG_PTR KeIpiGenericCall(
@@ -231,13 +232,20 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
     RtlCopyMemory(newPage, origMapped, PAGE_SIZE);
     MmUnmapIoSpace(origMapped, PAGE_SIZE);
 
+    // ── Obfuscated trampoline (17 bytes) ──────────────────────
+    // Instead of the easily-detected  mov rax, addr; jmp rax  (FF E0)
+    // pattern, we use:  push rax; mov rax, ~addr; not rax;
+    //                   xchg [rsp], rax; ret
+    // The handler address is stored bitwise-inverted in the binary.
     PUCHAR hookSite = (PUCHAR)newPage + pageOffset;
-    hookSite[0] = 0x48;
-    hookSite[1] = 0xB8;
-    uintptr_t addr = (uintptr_t)handlerAddr;
-    RtlCopyMemory(&hookSite[2], &addr, sizeof(void*));
-    hookSite[10] = 0xFF;
-    hookSite[11] = 0xE0;
+    uintptr_t encodedAddr = ~(uintptr_t)handlerAddr;
+    hookSite[0]  = 0x50;                                     // push rax
+    hookSite[1]  = 0x48; hookSite[2] = 0xB8;                 // mov rax, imm64
+    RtlCopyMemory(&hookSite[3], &encodedAddr, 8);             //   (~handler)
+    hookSite[11] = 0x48; hookSite[12] = 0xF7; hookSite[13] = 0xD0; // not rax
+    hookSite[14] = 0x48; hookSite[15] = 0x87; hookSite[16] = 0x04; // xchg [rsp], rax
+    hookSite[17] = 0x24;
+    hookSite[18] = 0xC3;                                     // ret
 
     KIRQL oldIrql = KeRaiseIrqlToDpcLevel();
 
@@ -251,12 +259,13 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
 
     KeIpiGenericCall(FlushSinglePageIpi, pageBase);
 
-    g_PteHook.targetVA    = targetFunction;
-    g_PteHook.pteAddress  = pte;
-    g_PteHook.originalPfn = originalPte.PageFrameNumber;
-    g_PteHook.newPfn      = newPfn;
-    g_PteHook.newPageVA   = newPage;
-    g_PteHook.newPagePA   = newPagePA;
+    // Encrypt sensitive hook state with runtime key
+    g_PteHook.targetVA    = (PVOID)kc::EncryptU64((ULONG64)targetFunction);
+    g_PteHook.pteAddress  = (PPTE_ENTRY)kc::EncryptPtr((PVOID)pte);
+    g_PteHook.originalPfn = kc::EncryptU64(originalPte.PageFrameNumber);
+    g_PteHook.newPfn      = kc::EncryptU64(newPfn);
+    g_PteHook.newPageVA   = kc::EncryptPtr(newPage);
+    g_PteHook.newPagePA   = newPagePA;  // PA needed for free
     g_PteHook.active      = TRUE;
     g_PteHookInstalled    = TRUE;
 
@@ -265,26 +274,34 @@ static BOOLEAN InstallPteHook(PVOID targetFunction, PVOID handlerAddr)
 
 static VOID RestorePteHook()
 {
-    if (!g_PteHook.active || !g_PteHook.pteAddress)
+    if (!g_PteHook.active)
         return;
+
+    // Decrypt hook state
+    PPTE_ENTRY pte = (PPTE_ENTRY)kc::DecryptPtr((PVOID)g_PteHook.pteAddress);
+    ULONG64 origPfn = kc::DecryptU64(g_PteHook.originalPfn);
+    PVOID targetVA = (PVOID)kc::DecryptU64((ULONG64)g_PteHook.targetVA);
+    PVOID pageVA = kc::DecryptPtr(g_PteHook.newPageVA);
+
+    if (!pte) return;
 
     KIRQL oldIrql = KeRaiseIrqlToDpcLevel();
 
     PTE_ENTRY restored;
-    restored.value = g_PteHook.pteAddress->value;
-    restored.PageFrameNumber = g_PteHook.originalPfn;
+    restored.value = pte->value;
+    restored.PageFrameNumber = origPfn;
 
     InterlockedExchange64(
-        (volatile LONG64*)&g_PteHook.pteAddress->value,
+        (volatile LONG64*)&pte->value,
         restored.value);
 
     KeLowerIrql(oldIrql);
 
-    ULONG64 pageBase = (ULONG64)g_PteHook.targetVA & ~0xFFFULL;
+    ULONG64 pageBase = (ULONG64)targetVA & ~0xFFFULL;
     KeIpiGenericCall(FlushSinglePageIpi, pageBase);
 
-    if (g_PteHook.newPageVA)
-        MmFreeContiguousMemory(g_PteHook.newPageVA);
+    if (pageVA)
+        MmFreeContiguousMemory(pageVA);
 
     g_PteHook.active = FALSE;
 }
