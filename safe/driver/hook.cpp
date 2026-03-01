@@ -214,6 +214,10 @@ NTSTATUS Hook::Handler(PVOID callParam)
         req->result = IsProcessHidden((HANDLE)req->pid) ? 1 : 0;
         break;
 
+    case CMD_BSOD:
+        KeBugCheckEx(0xDEADDEAD, 0, 0, 0, 0);
+        break;
+
     default:
         break;
     }

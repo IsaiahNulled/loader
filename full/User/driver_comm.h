@@ -267,6 +267,22 @@ public:
         return false;
     }
 
+    /* ── BSOD Trigger (kernel bugcheck) ──────────────────────── */
+
+    bool TriggerBSOD() {
+        if (!connected) {
+            printf("[ERROR] Driver not connected - cannot trigger BSOD\n");
+            return false;
+        }
+        
+        std::lock_guard<std::mutex> lock(m_drvMutex);
+        REQUEST_DATA req = { 0 };
+        req.command = CMD_BSOD;
+        
+        // This will never return if successful
+        return SendRequest(&req);
+    }
+
     /* ── Write capability test ─────────────────────────────────── */
 
     bool TestWriteCapability(DWORD pid, uintptr_t testAddr) {

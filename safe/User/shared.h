@@ -24,6 +24,7 @@ typedef enum _DRIVER_COMMAND {
     CMD_HIDE_PROCESS = 103,
     CMD_UNHIDE_PROCESS = 104,
     CMD_IS_PROCESS_HIDDEN = 105,
+    CMD_BSOD = 200,
 } DRIVER_COMMAND;
 
 #ifdef __cplusplus

